@@ -54,12 +54,10 @@ Maintenant, il faut télécharger le logiciel lui-même et le projet Boutique ER
 
 <ol>
   
-  <li>Allez sur la page <a href="https://github.com/gykhamine/Gykhamine"><b>https://github.com/gykhamine/Gykhamine</b></a></li>
+  <li>Allez sur la page <a href="https://github.com/gykhamine/Gykhamine"><b>Gykhamine-studio</b></a></li>
   <li>Cliquez sur le bouton vert "Code", puis "Download ZIP".</li>
-  <li>Allez sur la page <a href="https://github.com/gykhamine/Boutique_erp"><b>https://github.com/gykhamine/Boutique_erp</b></a></li>
-  <li>Allez sur la page <b>https://github.com/gykhamine/Boutique_erp</b>.</li>
+  <li>Allez sur la page <a href="https://github.com/gykhamine/Boutique_erp"><b>Boutique_erp</b></a></li>
   <li>Cliquez sur le bouton vert "Code", puis "Download ZIP".</li>
-  
   <li>Décompressez le fichier ZIP dans votre dossier personnel.</li>
   <li>Ouvrez votre terminal, tapez <code>cd </code> (avec un espace après cd), puis glissez-déposez le dossier décompressé dans le terminal. Appuyez sur Entrée.</li>
 </ol>
