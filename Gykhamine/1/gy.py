@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════╗
-║           GYKHAMINE STUDIO — v2.5.3                      ║
+║           GYKHAMINE STUDIO — v2.5.4                      ║
 ║     No-code visual editor for Gykhamine capsules         ║
 ║     Developed for the GCI project — Brazzaville, Congo   ║
 ╚══════════════════════════════════════════════════════════╝
@@ -29,7 +29,7 @@ def set_margins(widget, val):
 #  GLOBAL CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════
 APP_ID   = "org.gykhamine.studio"
-VERSION  = "2.5.3"
+VERSION  = "2.5.4"
 SCRIPT_DIR = Path(__file__).parent.resolve()
 LOGO_PATH  = SCRIPT_DIR / "logo.png"
 DB_PATH    = Path.home() / ".config" / "gykhamine_studio.db"
@@ -197,24 +197,23 @@ SEPARATOR_RE = re.compile(r'^#{4,}.*$|^/{4,}.*$|^-{4,}.*$', re.MULTILINE)
 def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
     lines = code.splitlines(keepends=True)
     blocks, i, current_lines, current_start = [], 0, [], 0
-    
     def flush(label_override=None):
         nonlocal current_lines, current_start
         if not current_lines: return
         raw = "".join(current_lines)
         if raw.strip():
             stripped = raw.strip()
-            if label_override: 
+            if label_override:
                 btype, bname = "separator", label_override
-            elif re.match(r'^(import|from)\s+', stripped): 
+            elif re.match(r'^(import|from)\s+', stripped):
                 btype, bname = "import", stripped.splitlines()[0][:60]
-            elif re.match(r'^class\s+(\w+)', stripped): 
+            elif re.match(r'^class\s+(\w+)', stripped):
                 btype, bname = "class", re.match(r'^class\s+(\w+)', stripped).group(1)
-            elif re.search(r'\bdef\s+(\w+)\s*\(', stripped): 
+            elif re.search(r'\bdef\s+(\w+)\s*\(', stripped):
                 btype, bname = "function", re.search(r'\bdef\s+(\w+)\s*\(', stripped).group(1)
-            elif stripped.startswith("#"): 
+            elif stripped.startswith("#"):
                 btype, bname = "comment", stripped[:60]
-            else: 
+            else:
                 btype, bname = "other", stripped[:40] if stripped else "bloc"
             blocks.append({"type": btype, "name": bname, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
         current_lines, current_start = [], i
@@ -222,59 +221,42 @@ def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
-        
-        # 1. Gestion des séparateurs visuels (####, ----, etc.)
         if SEPARATOR_RE.match(stripped):
             flush()
             blocks.append({"type": "separator", "name": stripped.strip("#/-").strip() or "Séparateur", "code": line, "start": i, "end": i})
             current_start = i + 1
             i += 1
             continue
-            
-        # 2. Détection d'un début de bloc racine (décorateur, classe, fonction, ou commentaire racine)
-        # Un bloc racine commence obligatoirement à la colonne 0 (pas d'indentation)
+        
         is_root_block_start = not line.startswith((" ", "\t")) and (
-            stripped.startswith("@") or 
-            re.match(r'^(async\s+)?def\s+\w+', stripped) or 
-            re.match(r'^class\s+\w+', stripped) or 
+            stripped.startswith("@") or
+            re.match(r'^(async\s+)?def\s+\w+', stripped) or
+            re.match(r'^class\s+\w+', stripped) or
             stripped.startswith("#")
         )
-        
         if is_root_block_start:
             flush()
             current_start = i
-            
-            # Étape A : Capturer TOUS les décorateurs consécutifs (@...)
             while i < len(lines) and lines[i].strip().startswith("@"):
                 current_lines.append(lines[i])
                 i += 1
-                
-            # Étape B : Capturer la définition (class ou def) qui suit obligatoirement les décorateurs
             if i < len(lines):
                 current_lines.append(lines[i])
                 i += 1
-                
-                # Étape C : Capturer tout le corps indenté de la fonction/classe
-                while i < len(lines):
-                    l = lines[i]
-                    # Si la ligne est vide ou indentée, elle fait partie du bloc
-                    if l.strip() == "" or l.startswith((" ", "\t")):
-                        current_lines.append(l)
-                        i += 1
-                    # Si on retombe sur un autre bloc racine (colonne 0), on arrête la capture du corps
-                    elif not l.startswith((" ", "\t")) and (l.strip().startswith("@") or re.match(r'^(async\s+)?def\s+\w+', l.strip()) or re.match(r'^class\s+\w+', l.strip()) or l.strip().startswith("#")):
-                        break
-                    else:
-                        # Sécurité : inclure les lignes mal formatées pour ne pas perdre de code
-                        current_lines.append(l)
-                        i += 1
+            while i < len(lines):
+                l = lines[i]
+                if l.strip() == "" or l.startswith((" ", "\t")):
+                    current_lines.append(l)
+                    i += 1
+                elif not l.startswith((" ", "\t")) and (l.strip().startswith("@") or re.match(r'^(async\s+)?def\s+\w+', l.strip()) or re.match(r'^class\s+\w+', l.strip()) or l.strip().startswith("#")):
+                    break
+                else:
+                    current_lines.append(l)
+                    i += 1
             flush()
             continue
-            
-        # 3. Ligne normale (fait partie du bloc en cours ou regroupe les imports/autres)
         current_lines.append(line)
         i += 1
-        
     flush()
     return blocks
 
@@ -310,7 +292,6 @@ def _parse_css_blocks(code: str, file_path: str) -> list[dict]:
         raw = "".join(current_lines)
         if raw.strip(): blocks.append({"type": "style_rule", "name": label, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
         current_lines, current_start = [], i
-
     while i < len(lines):
         line = lines[i]; stripped = line.strip()
         if stripped.startswith('@') or (stripped and not stripped.startswith('/') and '{' in stripped and not stripped.startswith('}')):
@@ -328,7 +309,6 @@ def _parse_js_blocks(code: str, file_path: str) -> list[dict]:
         raw = "".join(current_lines)
         if raw.strip(): blocks.append({"type": "script_block", "name": label, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
         current_lines, current_start = [], i
-
     while i < len(lines):
         line = lines[i]; stripped = line.strip()
         if re.match(r'^(class|function|async\s+function|const|let|var|export|import)\s+', stripped) or re.match(r'^//\s*#{4,}', stripped):
@@ -345,7 +325,6 @@ def _parse_c_blocks(code: str, file_path: str) -> list[dict]:
         raw = "".join(current_lines)
         if raw.strip(): blocks.append({"type": "c_block", "name": label, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
         current_lines, current_start = [], i
-
     while i < len(lines):
         line = lines[i]; stripped = line.strip()
         if re.match(r'^(class|struct|enum|namespace)\s+\w+', stripped) or re.match(r'^(void|int|char|float|double|bool|auto|unsigned|signed|long|short)\s+\w+\s*\(', stripped) or re.match(r'^#\s*(include|define|pragma|ifdef|ifndef|endif)', stripped) or re.match(r'^//\s*#{4,}', stripped):
@@ -450,13 +429,10 @@ class FilePanel(Gtk.Box):
         self.on_project_select = on_project_select
         self.on_file_created = on_file_created
         self.on_file_imported = on_file_imported
-        
         self.project_root = None
-        # TreeStore: (nom_affiché, chemin_complet, est_dossier)
         self.tree_store = Gtk.TreeStore(str, str, bool)
-        self.show_hidden = False # État pour afficher les fichiers cachés
+        self.show_hidden = False
         
-        # Header
         lbl = Gtk.Label(label="📁 Projet")
         lbl.add_css_class("panel-title")
         lbl.set_xalign(0)
@@ -465,32 +441,23 @@ class FilePanel(Gtk.Box):
         lbl.set_margin_bottom(6)
         self.append(lbl)
         self.append(Gtk.Separator())
-
-        # Stack pour basculer entre Fichiers et Récents
+        
         self.stack = Gtk.Stack()
         self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
-
-        # --- VUE ARBORESCENTE (TREE VIEW) ---
+        
         scroll_files = Gtk.ScrolledWindow()
         scroll_files.set_vexpand(True)
         scroll_files.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-
         self.tree_view = Gtk.TreeView(model=self.tree_store)
         self.tree_view.set_headers_visible(False)
         self.tree_view.add_css_class("file-tree-view")
-        
-        # Colonne avec rendu personnalisé pour les icônes
         renderer = Gtk.CellRendererText()
         column = Gtk.TreeViewColumn("Fichiers", renderer, text=0)
         column.set_cell_data_func(renderer, self._on_tree_cell_data)
         self.tree_view.append_column(column)
-        
-        # Signal natif et fiable pour l'activation (clic/double-clic)
         self.tree_view.connect("row-activated", self._on_row_activated)
-        
         scroll_files.set_child(self.tree_view)
-
-        # --- VUE RECENTS (LISTE SIMPLE) ---
+        
         scroll_projs = Gtk.ScrolledWindow()
         scroll_projs.set_vexpand(True)
         scroll_projs.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -498,71 +465,34 @@ class FilePanel(Gtk.Box):
         self.recent_list.add_css_class("file-list")
         self.recent_list.connect("row-activated", self._on_project_selected)
         scroll_projs.set_child(self.recent_list)
-
+        
         self.stack.add_named(scroll_files, "files")
         self.stack.add_named(scroll_projs, "recent")
         self.append(self.stack)
-
-        # Barre de navigation
+        
         nav_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         set_margins(nav_bar, 6)
         nav_bar.set_margin_start(8)
         nav_bar.set_margin_end(8)
-        
-        btn_files = Gtk.Button(label="📄")
-        btn_files.set_tooltip_text("Fichiers")
-        btn_files.add_css_class("flat")
-        btn_files.set_hexpand(True)
-        btn_files.connect("clicked", lambda *_: self.stack.set_visible_child_name("files"))
-        
-        btn_recent = Gtk.Button(label="🕒")
-        btn_recent.set_tooltip_text("Récents")
-        btn_recent.add_css_class("flat")
-        btn_recent.set_hexpand(True)
-        btn_recent.connect("clicked", lambda *_: self.stack.set_visible_child_name("recent"))
-        
-        btn_new = Gtk.Button(label="➕")
-        btn_new.set_tooltip_text("Nouveau fichier")
-        btn_new.add_css_class("flat")
-        btn_new.set_hexpand(True)
-        btn_new.connect("clicked", self._create_new_file)
-        
-        btn_import = Gtk.Button(label="📥")
-        btn_import.set_tooltip_text("Importer")
-        btn_import.add_css_class("flat")
-        btn_import.set_hexpand(True)
-        btn_import.connect("clicked", self._import_file)
-
-        # Bouton pour afficher/masquer les fichiers cachés
-        self.btn_hidden = Gtk.Button(label="🙈")
-        self.btn_hidden.set_tooltip_text("Afficher les fichiers cachés")
-        self.btn_hidden.add_css_class("flat")
-        self.btn_hidden.connect("clicked", self._toggle_hidden_files)
-
-        nav_bar.append(btn_files)
-        nav_bar.append(btn_recent)
-        nav_bar.append(btn_new)
-        nav_bar.append(btn_import)
-        nav_bar.append(self.btn_hidden)
-        
+        btn_files = Gtk.Button(label="📄"); btn_files.set_tooltip_text("Fichiers"); btn_files.add_css_class("flat"); btn_files.set_hexpand(True); btn_files.connect("clicked", lambda *_: self.stack.set_visible_child_name("files"))
+        btn_recent = Gtk.Button(label="🕒"); btn_recent.set_tooltip_text("Récents"); btn_recent.add_css_class("flat"); btn_recent.set_hexpand(True); btn_recent.connect("clicked", lambda *_: self.stack.set_visible_child_name("recent"))
+        btn_new = Gtk.Button(label="➕"); btn_new.set_tooltip_text("Nouveau fichier"); btn_new.add_css_class("flat"); btn_new.set_hexpand(True); btn_new.connect("clicked", self._create_new_file)
+        btn_import = Gtk.Button(label="📥"); btn_import.set_tooltip_text("Importer"); btn_import.add_css_class("flat"); btn_import.set_hexpand(True); btn_import.connect("clicked", self._import_file)
+        self.btn_hidden = Gtk.Button(label="🙈"); self.btn_hidden.set_tooltip_text("Afficher les fichiers cachés"); self.btn_hidden.add_css_class("flat"); self.btn_hidden.connect("clicked", self._toggle_hidden_files)
+        nav_bar.append(btn_files); nav_bar.append(btn_recent); nav_bar.append(btn_new); nav_bar.append(btn_import); nav_bar.append(self.btn_hidden)
         self.append(nav_bar)
 
     def _toggle_hidden_files(self, *_):
         self.show_hidden = not self.show_hidden
         if self.show_hidden:
-            self.btn_hidden.set_label("👁")
-            self.btn_hidden.set_tooltip_text("Masquer les fichiers cachés")
+            self.btn_hidden.set_label("👁"); self.btn_hidden.set_tooltip_text("Masquer les fichiers cachés")
         else:
-            self.btn_hidden.set_label("🙈")
-            self.btn_hidden.set_tooltip_text("Afficher les fichiers cachés")
-        
-        if self.project_root:
-            self.load_project(self.project_root, load_config())
+            self.btn_hidden.set_label("🙈"); self.btn_hidden.set_tooltip_text("Afficher les fichiers cachés")
+        if self.project_root: self.load_project(self.project_root, load_config())
 
     def _on_tree_cell_data(self, column, cell, model, tree_iter, data):
         name = model.get_value(tree_iter, 0)
         is_folder = model.get_value(tree_iter, 2)
-        
         if is_folder:
             cell.set_property("weight", Pango.Weight.BOLD)
             cell.set_property("text", f"📁 {name}")
@@ -570,9 +500,7 @@ class FilePanel(Gtk.Box):
         else:
             cell.set_property("weight", Pango.Weight.NORMAL)
             ext = Path(name).suffix.lower() if '.' in name else ""
-            icon = "📄"
-            color = "#888888" if name.startswith('.') else "#e0e0e0"
-
+            icon, color = "📄", "#888888" if name.startswith('.') else "#e0e0e0"
             if name in ("settings.py", "manage.py"): icon = "⚙"
             elif name == "views.py": icon = "👁"
             elif name == "models.py": icon = "🗄"
@@ -581,25 +509,19 @@ class FilePanel(Gtk.Box):
             elif ext in ('.c', '.cpp', '.h'): icon = "⚙️"
             elif ext == '.sh': icon = "📜"
             elif ext in ('.html', '.jinja', '.jinja2'): icon = "🌐"
-            
             cell.set_property("text", f"  {icon} {name}")
             cell.set_property("foreground", color)
 
     def _on_row_activated(self, treeview, path, column):
-        """Gère l'ouverture des fichiers ou l'expansion des dossiers de manière fiable"""
         model = treeview.get_model()
         tree_iter = model.get_iter(path)
         full_path = model.get_value(tree_iter, 1)
         is_folder = model.get_value(tree_iter, 2)
-        
         if is_folder:
-            if treeview.row_expanded(path):
-                treeview.collapse_row(path)
-            else:
-                treeview.expand_row(path, False)
+            if treeview.row_expanded(path): treeview.collapse_row(path)
+            else: treeview.expand_row(path, False)
         else:
-            if Path(full_path).exists():
-                self.on_file_select(Path(full_path))
+            if Path(full_path).exists(): self.on_file_select(Path(full_path))
 
     def load_project(self, root: Path, config: dict):
         self.project_root = root
@@ -608,107 +530,71 @@ class FilePanel(Gtk.Box):
         self._load_recent_projects(config)
 
     def _populate_tree(self, directory: Path, parent_iter):
-        """Remplit l'arbre récursivement"""
         try:
             entries = []
             for entry in directory.iterdir():
-                # Ignorer les dossiers systèmes standards
-                if entry.name in ["__pycache__", "venv", "node_modules", ".git"]:
-                    continue
-                # Ignorer les fichiers/dossiers cachés si l'option est désactivée
-                if not self.show_hidden and entry.name.startswith('.'):
-                    continue
+                if entry.name in ["__pycache__", "venv", "node_modules", ".git"]: continue
+                if not self.show_hidden and entry.name.startswith('.'): continue
                 entries.append(entry)
-
-            # Trier : Dossiers d'abord, puis fichiers, alphabétiquement
             entries.sort(key=lambda p: (not p.is_dir(), p.name.lower()))
-            
             for entry in entries:
                 is_folder = entry.is_dir()
                 new_iter = self.tree_store.append(parent_iter, [entry.name, str(entry), is_folder])
-                if is_folder:
-                    self._populate_tree(entry, new_iter)
-        except PermissionError:
-            pass
+                if is_folder: self._populate_tree(entry, new_iter)
+        except PermissionError: pass
 
     def _load_recent_projects(self, config):
-        while child := self.recent_list.get_first_child(): 
-            self.recent_list.remove(child)
-        
+        while child := self.recent_list.get_first_child(): self.recent_list.remove(child)
         for proj_path in get_recent_projects(config):
             path = Path(proj_path)
             if path.exists():
                 row = Gtk.ListBoxRow()
                 row._project_path = path
                 lbl = Gtk.Label(label=f"  📂 {path.name}\n{path.parent}")
-                lbl.set_xalign(0)
-                lbl.set_margin_start(16)
-                lbl.set_margin_top(6)
-                lbl.set_margin_bottom(6)
-                lbl.set_ellipsize(Pango.EllipsizeMode.END)
-                lbl.set_max_width_chars(35)
-                lbl.add_css_class("file-item")
+                lbl.set_xalign(0); lbl.set_margin_start(16); lbl.set_margin_top(6); lbl.set_margin_bottom(6)
+                lbl.set_ellipsize(Pango.EllipsizeMode.END); lbl.set_max_width_chars(35); lbl.add_css_class("file-item")
                 row.set_child(lbl)
                 self.recent_list.append(row)
 
     def _on_project_selected(self, lb, row):
-        if hasattr(row, "_project_path"): 
-            self.on_project_select(row._project_path)
+        if hasattr(row, "_project_path"): self.on_project_select(row._project_path)
 
     def _create_new_file(self, *_):
-        if not self.project_root: 
-            return self._show_error("Aucun projet ouvert")
-        
+        if not self.project_root: return self._show_error("Aucun projet ouvert")
         dialog = Gtk.Dialog(title="Nouveau fichier", transient_for=self.get_root())
         dialog.set_default_size(400, 250)
         content = dialog.get_content_area()
-        content.set_spacing(8)
-        set_margins(content, 12)
-        
+        content.set_spacing(8); set_margins(content, 12)
         content.append(Gtk.Label(label="Nom du fichier (avec extension):", xalign=0))
-        entry = Gtk.Entry()
-        entry.set_placeholder_text("ex: style.css, script.js, main.c")
+        entry = Gtk.Entry(); entry.set_placeholder_text("ex: style.css, script.js, main.c")
         content.append(entry)
-        
         content.append(Gtk.Label(label="Contenu initial (optionnel):", xalign=0, margin_top=8))
         text_buf = Gtk.TextBuffer()
         text_view = Gtk.TextView.new_with_buffer(text_buf)
         text_view.set_size_request(-1, 100)
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_child(text_view)
+        scroll = Gtk.ScrolledWindow(); scroll.set_child(text_view)
         content.append(scroll)
-        
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         btn_cancel = Gtk.Button(label="Annuler")
-        btn_create = Gtk.Button(label="✅ Créer")
-        btn_create.add_css_class("suggested-action")
-        btn_box.append(btn_cancel)
-        btn_box.append(btn_create)
+        btn_create = Gtk.Button(label="✅ Créer"); btn_create.add_css_class("suggested-action")
+        btn_box.append(btn_cancel); btn_box.append(btn_create)
         content.append(btn_box)
-        
         def on_create(*_):
             filename = entry.get_text().strip()
-            if not filename: 
-                return self._show_error("Nom requis")
-            
+            if not filename: return self._show_error("Nom requis")
             filepath = self.project_root / filename
-            if filepath.exists(): 
-                return self._show_error(f"{filename} existe déjà")
-            
+            if filepath.exists(): return self._show_error(f"{filename} existe déjà")
             text = text_buf.get_text(text_buf.get_start_iter(), text_buf.get_end_iter(), True) or f"# {filename}\n# Créé avec Gykhamine Studio\n"
             filepath.write_text(text, encoding='utf-8')
-            
             self.on_file_created(filepath)
             self.load_project(self.project_root, load_config())
             dialog.destroy()
-            
         btn_create.connect("clicked", on_create)
         btn_cancel.connect("clicked", lambda *_: dialog.destroy())
         dialog.present()
 
     def _import_file(self, *_):
-        if not self.project_root: 
-            return self._show_error("Aucun projet ouvert")
+        if not self.project_root: return self._show_error("Aucun projet ouvert")
         Gtk.FileDialog(title="Importer un fichier").open(self.get_root(), None, self._on_import_selected)
 
     def _on_import_selected(self, dialog, result):
@@ -717,25 +603,16 @@ class FilePanel(Gtk.Box):
             if file:
                 src = Path(file.get_path())
                 dst = self.project_root / src.name
-                if dst.exists() and Gtk.MessageDialog(
-                    transient_for=self.get_root(), 
-                    flags=0, 
-                    message_type=Gtk.MessageType.WARNING, 
-                    buttons=Gtk.ButtonsType.YES_NO, 
-                    text="Fichier existant", 
-                    secondary_text=f"{dst.name} existe. Écraser ?"
-                ).run() != Gtk.ResponseType.YES: 
+                if dst.exists() and Gtk.MessageDialog(transient_for=self.get_root(), flags=0, message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.YES_NO, text="Fichier existant", secondary_text=f"{dst.name} existe. Écraser ?").run() != Gtk.ResponseType.YES:
                     return
-                
                 shutil.copy2(src, dst)
                 self.on_file_imported(dst)
                 self.load_project(self.project_root, load_config())
-        except Exception as e: 
-            self._show_error(f"Erreur: {e}")
+        except Exception as e: self._show_error(f"Erreur: {e}")
 
-    def _show_error(self, msg: str): 
-        self.get_root().get_child().add_toast(Adw.Toast(title=msg, timeout=3))        
-        
+    def _show_error(self, msg: str):
+        self.get_root().get_child().add_toast(Adw.Toast(title=msg, timeout=3))
+
 class TerminalPanel(Gtk.Box):
     def __init__(self, get_project_root, get_config, show_toast):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -786,9 +663,6 @@ class TerminalPanel(Gtk.Box):
             except Exception as e: GLib.idle_add(self._log, f"❌ Error: {e}")
         threading.Thread(target=_thread, daemon=True).start()
 
-# ═══════════════════════════════════════════════════════════════════════
-#  CONTROL PANEL (RIGHT) - BUTTON NAMES PRESERVED
-# ═══════════════════════════════════════════════════════════════════════
 class ControlPanel(Gtk.Box):
     def __init__(self, get_project_root, get_config, show_toast, terminal_panel):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -803,34 +677,55 @@ class ControlPanel(Gtk.Box):
         for label, cb in [("🔍 Check", self._check_ports), ("🔫 Kill port", self._kill_port_dialog)]:
             btn = Gtk.Button(label=label); btn.add_css_class("ctrl-btn-small"); btn.connect("clicked", cb); port_box.append(btn)
         self.append(port_box)
+        
         lbl1 = Gtk.Label(label="🚀 Django Server"); lbl1.add_css_class("control-section-title"); lbl1.set_xalign(0); self.append(lbl1)
         self._add_service_row("runserver", "▶ Dev Server", self._start_devserver, self._stop_service_factory("runserver"))
         self.dev_port_label = Gtk.Label(label="Port: auto"); self.dev_port_label.add_css_class("ctrl-btn-small"); self.dev_port_label.set_xalign(0); self.append(self.dev_port_label)
         self._add_service_row("gunicorn", "▶ Gunicorn", self._start_gunicorn, self._stop_service_factory("gunicorn"))
         self.gunicorn_port_label = Gtk.Label(label="Bind: config"); self.gunicorn_port_label.add_css_class("ctrl-btn-small"); self.gunicorn_port_label.set_xalign(0); self.append(self.gunicorn_port_label)
+        
         sep = Gtk.Separator(); sep.set_margin_top(8); sep.set_margin_bottom(4); self.append(sep)
         lbl2 = Gtk.Label(label="🗄 Django Commands (manage.py)"); lbl2.add_css_class("control-section-title"); lbl2.set_xalign(0); self.append(lbl2)
         grid = Gtk.Grid(); grid.set_column_spacing(6); grid.set_row_spacing(6)
-        commands = [("📐 makemigrations", "makemigrations"), ("⬆ migrate", "migrate"), ("👤 superuser", "createsuperuser"), ("🐚 shell", "shell"), ("🗄 dbshell", "dbshell"), ("📦 collectstatic", "collectstatic"), ("✅ check", "check"), ("📜 showmigrations", "showmigrations"), ("🧹 flush", "flush")]
+        commands = [
+            ("📐 makemigrations", "makemigrations"), 
+            ("⬆ migrate", "migrate"), 
+            ("👤 superuser", "createsuperuser"), 
+            ("🐚 shell", "shell"), 
+            ("🗄 dbshell", "dbshell"), 
+            ("📦 collectstatic", "collectstatic"), 
+            ("✅ check", "check"), 
+            ("📜 showmigrations", "showmigrations"), 
+            ("🧹 flush", "flush")
+        ]
         for idx, (label, cmd) in enumerate(commands):
-            btn = Gtk.Button(label=label); btn.add_css_class("ctrl-btn"); btn.connect("clicked", lambda _, c=cmd: self._run_manage_command(c)); grid.attach(btn, idx % 3, idx // 3, 1, 1)
+            btn = Gtk.Button(label=label); btn.add_css_class("ctrl-btn")
+            if cmd == "createsuperuser":
+                btn.connect("clicked", lambda *_: self._show_createsuperuser_dialog())
+            else:
+                btn.connect("clicked", lambda _, c=cmd: self._run_manage_command(c))
+            grid.attach(btn, idx % 3, idx // 3, 1, 1)
         self.append(grid)
+        
         sep2 = Gtk.Separator(); sep2.set_margin_top(8); sep2.set_margin_bottom(4); self.append(sep2)
         lbl3 = Gtk.Label(label="💊 Gykhamine Capsule"); lbl3.add_css_class("control-section-title"); lbl3.set_xalign(0); self.append(lbl3)
         row_cap = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         for label, path, sudo in [("🔑 /1/gy.py", "Gykhamine/1/gy.py", True), ("👤 /2/gy.py", "Gykhamine/2/gy.py", False)]:
             btn = Gtk.Button(label=f"Run {label}"); btn.add_css_class("ctrl-btn-warn" if sudo else "ctrl-btn"); btn.connect("clicked", lambda *_: self._run_gy(path, sudo)); row_cap.append(btn)
         self.append(row_cap)
+        
         sep3 = Gtk.Separator(); sep3.set_margin_top(8); sep3.set_margin_bottom(4); self.append(sep3)
         lbl4 = Gtk.Label(label="🤖 AI (llama.cpp)"); lbl4.add_css_class("control-section-title"); lbl4.set_xalign(0); self.append(lbl4)
         self._add_service_row("llama", "▶ Run llama-server", self._start_llama, self._stop_service_factory("llama"))
         btn_browser = Gtk.Button(label="🌐 Open browser"); btn_browser.add_css_class("ctrl-btn"); btn_browser.connect("clicked", self._open_browser); self.append(btn_browser)
+        
         sep_arch = Gtk.Separator(); sep_arch.set_margin_top(8); sep_arch.set_margin_bottom(4); self.append(sep_arch)
         lbl_arch = Gtk.Label(label="📦 ZIP Archiving"); lbl_arch.add_css_class("control-section-title"); lbl_arch.set_xalign(0); self.append(lbl_arch)
         row_arch = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         btn_compress = Gtk.Button(label="🗜 Compress to .zip"); btn_compress.add_css_class("ctrl-btn"); btn_compress.connect("clicked", self._compress_project)
         btn_decompress = Gtk.Button(label="📂 Decompress .zip"); btn_decompress.add_css_class("ctrl-btn"); btn_decompress.connect("clicked", self._decompress_archive)
         row_arch.append(btn_compress); row_arch.append(btn_decompress); self.append(row_arch)
+        
         sep4 = Gtk.Separator(); sep4.set_margin_top(8); sep4.set_margin_bottom(4); self.append(sep4)
         btn_stop_all = Gtk.Button(label="⏹ Stop all"); btn_stop_all.add_css_class("ctrl-btn-stop"); btn_stop_all.connect("clicked", self._stop_all_services); self.append(btn_stop_all)
 
@@ -855,14 +750,18 @@ class ControlPanel(Gtk.Box):
         self.current_session = self.sessions[str(root)]; self.session_label.set_text(f"📁 Session: {root.name}")
         return self.current_session
 
-    def _run_cmd(self, cmd: list, cwd=None, name=None, shell=False):
+    def _run_cmd(self, cmd: list, cwd=None, name=None, shell=False, extra_env=None):
         def _thread():
             try:
-                env = os.environ.copy(); env["PYTHONUNBUFFERED"] = "1"; env["PYTHONDONTWRITEBYTECODE"] = "1"; env["DJANGO_COLORS"] = "nocolor"
+                env = os.environ.copy()
+                env["PYTHONUNBUFFERED"] = "1"; env["PYTHONDONTWRITEBYTECODE"] = "1"; env["DJANGO_COLORS"] = "nocolor"
+                if extra_env: env.update(extra_env)
+                
                 proc = subprocess.Popen(cmd, cwd=cwd, shell=shell, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True, bufsize=0, env=env)
                 if name: self.processes[name] = proc
                 GLib.idle_add(self._set_dot, name, True)
                 if not shell: GLib.idle_add(self.terminal._log, f"▶ {' '.join(str(c) for c in cmd)}")
+                
                 def _read_stream(stream, prefix=""):
                     for line in iter(stream.readline, ''):
                         if line: GLib.idle_add(self.terminal._log, prefix + line.rstrip())
@@ -870,6 +769,7 @@ class ControlPanel(Gtk.Box):
                 t_out = threading.Thread(target=_read_stream, args=(proc.stdout,), daemon=True)
                 t_err = threading.Thread(target=_read_stream, args=(proc.stderr, ""), daemon=True)
                 t_out.start(); t_err.start(); t_out.join(); t_err.join(); proc.wait()
+                
                 if name: self.processes.pop(name, None)
                 GLib.idle_add(self._set_dot, name, False); GLib.idle_add(self.terminal._log, f"✓ Finished (code {proc.returncode})")
             except Exception as e:
@@ -884,10 +784,108 @@ class ControlPanel(Gtk.Box):
         return mp if mp.exists() else (list(root.rglob("manage.py"))[0] if list(root.rglob("manage.py")) else None)
 
     def _run_manage_command(self, command):
+        # Gestion des commandes nécessitant un TTY interactif
+        if command in ("shell", "dbshell"):
+            return self._run_interactive_command(command)
+            
         mp = self._manage_path()
         if not mp: return
         self.terminal._log(f"▶ python {mp.name} {command}")
         self._run_cmd([sys.executable, str(mp), command], cwd=str(mp.parent))
+
+    def _run_interactive_command(self, command):
+        """Ouvre un vrai terminal système pour les commandes interactives (shell, dbshell)"""
+        mp = self._manage_path()
+        if not mp: return
+        
+        # Liste des émulateurs de terminal courants sous Linux
+        terminals = [
+            ("gnome-terminal", "--"),
+            ("konsole", "-e"),
+            ("xfce4-terminal", "-x"),
+            ("alacritty", "-e"),
+            ("kitty", "-e"),
+            ("xterm", "-e"),
+            ("x-terminal-emulator", "-e")
+        ]
+        
+        term_cmd = None
+        exec_flag = "-e"
+        for t, flag in terminals:
+            if shutil.which(t):
+                term_cmd = t
+                exec_flag = flag
+                break
+                
+        if not term_cmd:
+            return self.terminal._log("❌ Aucun émulateur de terminal trouvé. Veuillez installer gnome-terminal ou similaire.")
+            
+        full_cmd = f"{sys.executable} {mp.name} {command}"
+        self.terminal._log(f"🖥 Ouverture d'un terminal externe pour: {full_cmd}")
+        try:
+            subprocess.Popen([term_cmd, exec_flag, full_cmd], cwd=str(mp.parent))
+        except Exception as e:
+            self.terminal._log(f"❌ Échec de l'ouverture du terminal: {e}")
+
+    def _show_createsuperuser_dialog(self, *_):
+        """Affiche un formulaire pour créer un superutilisateur Django sans TTY"""
+        dialog = Gtk.Dialog(title="Créer un Superutilisateur Django", transient_for=self.get_root())
+        dialog.set_default_size(400, 300)
+        content = dialog.get_content_area()
+        content.set_spacing(12); set_margins(content, 16)
+        
+        grid = Gtk.Grid()
+        grid.set_row_spacing(8); grid.set_column_spacing(8)
+        
+        grid.attach(Gtk.Label(label="Nom d'utilisateur :", xalign=0), 0, 0, 1, 1)
+        entry_user = Gtk.Entry(); entry_user.set_placeholder_text("admin"); grid.attach(entry_user, 1, 0, 1, 1)
+        
+        grid.attach(Gtk.Label(label="Adresse e-mail :", xalign=0), 0, 1, 1, 1)
+        entry_email = Gtk.Entry(); entry_email.set_placeholder_text("admin@example.com"); grid.attach(entry_email, 1, 1, 1, 1)
+        
+        grid.attach(Gtk.Label(label="Mot de passe :", xalign=0), 0, 2, 1, 1)
+        entry_pwd = Gtk.Entry(); entry_pwd.set_visibility(False); grid.attach(entry_pwd, 1, 2, 1, 1)
+        
+        grid.attach(Gtk.Label(label="Confirmer le mot de passe :", xalign=0), 0, 3, 1, 1)
+        entry_pwd_confirm = Gtk.Entry(); entry_pwd_confirm.set_visibility(False); grid.attach(entry_pwd_confirm, 1, 3, 1, 1)
+        
+        content.append(grid)
+        
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_box.set_halign(Gtk.Align.END)
+        btn_cancel = Gtk.Button(label="Annuler")
+        btn_create = Gtk.Button(label="✅ Créer", css_classes=["suggested-action"])
+        btn_box.append(btn_cancel); btn_box.append(btn_create)
+        content.append(btn_box)
+        
+        def on_create(*_):
+            username = entry_user.get_text().strip()
+            email = entry_email.get_text().strip()
+            pwd = entry_pwd.get_text()
+            pwd_confirm = entry_pwd_confirm.get_text()
+            
+            if not username or not pwd:
+                self.show_toast("❌ Le nom d'utilisateur et le mot de passe sont requis")
+                return
+            if pwd != pwd_confirm:
+                self.show_toast("❌ Les mots de passe ne correspondent pas")
+                return
+                
+            mp = self._manage_path()
+            if not mp: return
+            
+            self.terminal._log(f"▶ Création du superutilisateur: {username}")
+            extra_env = {
+                "DJANGO_SUPERUSER_USERNAME": username,
+                "DJANGO_SUPERUSER_EMAIL": email,
+                "DJANGO_SUPERUSER_PASSWORD": pwd
+            }
+            self._run_cmd([sys.executable, str(mp), "createsuperuser", "--noinput"], cwd=str(mp.parent), extra_env=extra_env)
+            dialog.destroy()
+            
+        btn_create.connect("clicked", on_create)
+        btn_cancel.connect("clicked", lambda *_: dialog.destroy())
+        dialog.present()
 
     def _get_free_port(self, preferred_port=None):
         cfg = self.get_config()
@@ -1210,7 +1208,6 @@ class SettingsDialog(Adw.PreferencesDialog):
         except: pass
         self.on_save(self.config); self.close()
 
-# CORRECTION: Removed "box-sizing" and "cursor" not supported by GTK4
 CSS = """
 /* ── Base ────────────────────────────────────────────────────────── */
 window { background-color: #0d0d0d; color: #e0e0e0; }
@@ -1315,31 +1312,22 @@ class GykhamineStudioApp(Adw.Application):
         header.pack_end(btn_settings)
         main_box.append(header)
         
-        # 1. Main horizontal pane (Left vs Rest)
         self.main_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self.main_paned.set_vexpand(True); self.main_paned.set_hexpand(True)
-        self.main_paned.set_shrink_start_child(True)
-        self.main_paned.set_shrink_end_child(False)
-        self.main_paned.set_resize_start_child(True)
-        self.main_paned.set_resize_end_child(True)
+        self.main_paned.set_shrink_start_child(True); self.main_paned.set_shrink_end_child(False)
+        self.main_paned.set_resize_start_child(True); self.main_paned.set_resize_end_child(True)
         self.file_panel = FilePanel(self._on_file_selected, self._load_project, self._on_file_created, self._on_file_imported)
         self.main_paned.set_start_child(self.file_panel)
         self.main_paned.set_position(280)
         
-        # 2. Workspace vertical pane (Top: Editor+Control vs Bottom: Terminal)
         self.workspace_paned = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
         self.workspace_paned.set_vexpand(True); self.workspace_paned.set_hexpand(True)
-        self.workspace_paned.set_shrink_start_child(False)
-        self.workspace_paned.set_shrink_end_child(False)
-        self.workspace_paned.set_resize_start_child(True)
-        self.workspace_paned.set_resize_end_child(True)
+        self.workspace_paned.set_shrink_start_child(False); self.workspace_paned.set_shrink_end_child(False)
+        self.workspace_paned.set_resize_start_child(True); self.workspace_paned.set_resize_end_child(True)
         
-        # 3. Content horizontal pane (Editor vs Control Panel)
         self.content_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
-        self.content_paned.set_shrink_start_child(False)
-        self.content_paned.set_shrink_end_child(False)
-        self.content_paned.set_resize_start_child(True)
-        self.content_paned.set_resize_end_child(False)
+        self.content_paned.set_shrink_start_child(False); self.content_paned.set_shrink_end_child(False)
+        self.content_paned.set_resize_start_child(True); self.content_paned.set_resize_end_child(False)
         self.editor_view = BlockEditorView(self._show_toast, self._run_python_file, get_config_cb=lambda: self.config)
         self.content_paned.set_start_child(self.editor_view)
         self.content_paned.set_position(800)
@@ -1349,7 +1337,6 @@ class GykhamineStudioApp(Adw.Application):
         self.ctrl_scroll.set_hexpand(True); self.ctrl_scroll.set_vexpand(True); self.ctrl_scroll.set_child(self.control_panel)
         self.content_paned.set_end_child(self.ctrl_scroll)
         
-        # Hierarchy assembly
         self.workspace_paned.set_start_child(self.content_paned)
         self.workspace_paned.set_end_child(self.terminal_panel)
         self.workspace_paned.set_position(600)
