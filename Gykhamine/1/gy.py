@@ -456,6 +456,13 @@ class FilePanel(Gtk.Box):
         column.set_cell_data_func(renderer, self._on_tree_cell_data)
         self.tree_view.append_column(column)
         self.tree_view.connect("row-activated", self._on_row_activated)
+        
+        # Right-click gesture for context menu (VS Code style)
+        self.gesture_click = Gtk.GestureClick.new()
+        self.gesture_click.set_button(Gdk.BUTTON_SECONDARY)
+        self.gesture_click.connect("pressed", self._on_right_click)
+        self.tree_view.add_controller(self.gesture_click)
+        
         scroll_files.set_child(self.tree_view)
         
         scroll_projs = Gtk.ScrolledWindow()
@@ -611,7 +618,144 @@ class FilePanel(Gtk.Box):
         except Exception as e: self._show_error(f"Erreur: {e}")
 
     def _show_error(self, msg: str):
-        self.get_root().get_child().add_toast(Adw.Toast(title=msg, timeout=3))
+        root = self.get_root()
+        if root:
+            overlay = root.get_child()
+            if hasattr(overlay, "add_toast"):
+                overlay.add_toast(Adw.Toast(title=f"❌ {msg}", timeout=3))
+
+    def _show_toast(self, msg: str):
+        root = self.get_root()
+        if root:
+            overlay = root.get_child()
+            if hasattr(overlay, "add_toast"):
+                overlay.add_toast(Adw.Toast(title=msg, timeout=3))
+
+    def _on_right_click(self, gesture, n_press, x, y):
+        result = self.tree_view.get_path_at_pos(int(x), int(y))
+        if result is None:
+            return
+        path, column, cell_x, cell_y = result
+        self.tree_view.set_cursor(path)
+        model = self.tree_view.get_model()
+        tree_iter = model.get_iter(path)
+        name = model.get_value(tree_iter, 0)
+        full_path = model.get_value(tree_iter, 1)
+        is_folder = model.get_value(tree_iter, 2)
+        self._show_context_menu(int(x), int(y), full_path, name, is_folder)
+
+    def _show_context_menu(self, x, y, full_path, name, is_folder):
+        popover = Gtk.Popover()
+        popover.set_parent(self.tree_view)
+        popover.set_has_arrow(False)
+        
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        set_margins(box, 6)
+        
+        btn_rename = Gtk.Button(label="✏️ Renommer")
+        btn_rename.set_halign(Gtk.Align.FILL)
+        btn_rename.add_css_class("flat")
+        btn_rename.connect("clicked", lambda *_: self._rename_item(full_path, name, is_folder, popover))
+        
+        btn_delete = Gtk.Button(label="🗑 Supprimer")
+        btn_delete.set_halign(Gtk.Align.FILL)
+        btn_delete.add_css_class("flat")
+        btn_delete.add_css_class("destructive-action")
+        btn_delete.connect("clicked", lambda *_: self._delete_item(full_path, name, is_folder, popover))
+        
+        box.append(btn_rename)
+        box.append(btn_delete)
+        popover.set_child(box)
+        
+        rect = Gdk.Rectangle()
+        rect.x = x
+        rect.y = y
+        rect.width = 1
+        rect.height = 1
+        popover.set_pointing_to(rect)
+        popover.popup()
+
+    def _rename_item(self, full_path, old_name, is_folder, popover):
+        popover.popdown()
+        dialog = Gtk.Dialog(title="Renommer", transient_for=self.get_root())
+        dialog.set_default_size(350, 150)
+        content = dialog.get_content_area()
+        content.set_spacing(8)
+        set_margins(content, 12)
+        
+        content.append(Gtk.Label(label=f"Nouveau nom pour '{old_name}':", xalign=0))
+        entry = Gtk.Entry()
+        entry.set_text(old_name)
+        entry.set_activates_default(True)
+        content.append(entry)
+        
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_cancel = Gtk.Button(label="Annuler")
+        btn_rename = Gtk.Button(label="✅ Renommer")
+        btn_rename.add_css_class("suggested-action")
+        btn_box.append(btn_cancel)
+        btn_box.append(btn_rename)
+        content.append(btn_box)
+        
+        def on_rename(*_):
+            new_name = entry.get_text().strip()
+            if not new_name or new_name == old_name:
+                dialog.destroy()
+                return
+            if "/" in new_name or "\\" in new_name:
+                self._show_error("Le nom ne peut pas contenir '/' ou '\\'")
+                return
+            new_path = Path(full_path).parent / new_name
+            if new_path.exists():
+                self._show_error(f"'{new_name}' existe déjà")
+                return
+            try:
+                Path(full_path).rename(new_path)
+                self.load_project(self.project_root, load_config())
+                self._show_toast(f"✅ Renommé en '{new_name}'")
+            except Exception as e:
+                self._show_error(f"Erreur: {e}")
+            dialog.destroy()
+            
+        btn_rename.connect("clicked", on_rename)
+        btn_cancel.connect("clicked", lambda *_: dialog.destroy())
+        dialog.present()
+
+    def _delete_item(self, full_path, name, is_folder, popover):
+        popover.popdown()
+        dialog = Gtk.Dialog(title="Confirmer la suppression", transient_for=self.get_root())
+        dialog.set_default_size(350, 150)
+        content = dialog.get_content_area()
+        content.set_spacing(8)
+        set_margins(content, 12)
+        
+        content.append(Gtk.Label(label=f"Voulez-vous vraiment supprimer '{name}' ?", xalign=0, margin_bottom=8))
+        content.append(Gtk.Label(label="Cette action est irréversible.", xalign=0, css_classes=["dim-label"]))
+        
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_cancel = Gtk.Button(label="Annuler")
+        btn_delete = Gtk.Button(label="🗑 Supprimer")
+        btn_delete.add_css_class("destructive-action")
+        btn_box.append(btn_cancel)
+        btn_box.append(btn_delete)
+        content.append(btn_box)
+        
+        def on_delete(*_):
+            try:
+                path = Path(full_path)
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+                self.load_project(self.project_root, load_config())
+                self._show_toast(f"🗑 Supprimé: {name}")
+            except Exception as e:
+                self._show_error(f"Erreur: {e}")
+            dialog.destroy()
+            
+        btn_delete.connect("clicked", on_delete)
+        btn_cancel.connect("clicked", lambda *_: dialog.destroy())
+        dialog.present()
 
 class TerminalPanel(Gtk.Box):
     def __init__(self, get_project_root, get_config, show_toast):
@@ -784,7 +928,6 @@ class ControlPanel(Gtk.Box):
         return mp if mp.exists() else (list(root.rglob("manage.py"))[0] if list(root.rglob("manage.py")) else None)
 
     def _run_manage_command(self, command):
-        # Gestion des commandes nécessitant un TTY interactif
         if command in ("shell", "dbshell"):
             return self._run_interactive_command(command)
             
@@ -794,32 +937,19 @@ class ControlPanel(Gtk.Box):
         self._run_cmd([sys.executable, str(mp), command], cwd=str(mp.parent))
 
     def _run_interactive_command(self, command):
-        """Ouvre un vrai terminal système pour les commandes interactives (shell, dbshell)"""
         mp = self._manage_path()
         if not mp: return
-        
-        # Liste des émulateurs de terminal courants sous Linux
         terminals = [
-            ("gnome-terminal", "--"),
-            ("konsole", "-e"),
-            ("xfce4-terminal", "-x"),
-            ("alacritty", "-e"),
-            ("kitty", "-e"),
-            ("xterm", "-e"),
-            ("x-terminal-emulator", "-e")
+            ("gnome-terminal", "--"), ("konsole", "-e"), ("xfce4-terminal", "-x"),
+            ("alacritty", "-e"), ("kitty", "-e"), ("xterm", "-e"), ("x-terminal-emulator", "-e")
         ]
-        
-        term_cmd = None
-        exec_flag = "-e"
+        term_cmd, exec_flag = None, "-e"
         for t, flag in terminals:
             if shutil.which(t):
-                term_cmd = t
-                exec_flag = flag
+                term_cmd, exec_flag = t, flag
                 break
-                
         if not term_cmd:
-            return self.terminal._log("❌ Aucun émulateur de terminal trouvé. Veuillez installer gnome-terminal ou similaire.")
-            
+            return self.terminal._log("❌ Aucun émulateur de terminal trouvé.")
         full_cmd = f"{sys.executable} {mp.name} {command}"
         self.terminal._log(f"🖥 Ouverture d'un terminal externe pour: {full_cmd}")
         try:
@@ -828,61 +958,43 @@ class ControlPanel(Gtk.Box):
             self.terminal._log(f"❌ Échec de l'ouverture du terminal: {e}")
 
     def _show_createsuperuser_dialog(self, *_):
-        """Affiche un formulaire pour créer un superutilisateur Django sans TTY"""
         dialog = Gtk.Dialog(title="Créer un Superutilisateur Django", transient_for=self.get_root())
         dialog.set_default_size(400, 300)
         content = dialog.get_content_area()
         content.set_spacing(12); set_margins(content, 16)
-        
-        grid = Gtk.Grid()
-        grid.set_row_spacing(8); grid.set_column_spacing(8)
-        
+        grid = Gtk.Grid(); grid.set_row_spacing(8); grid.set_column_spacing(8)
         grid.attach(Gtk.Label(label="Nom d'utilisateur :", xalign=0), 0, 0, 1, 1)
         entry_user = Gtk.Entry(); entry_user.set_placeholder_text("admin"); grid.attach(entry_user, 1, 0, 1, 1)
-        
         grid.attach(Gtk.Label(label="Adresse e-mail :", xalign=0), 0, 1, 1, 1)
         entry_email = Gtk.Entry(); entry_email.set_placeholder_text("admin@example.com"); grid.attach(entry_email, 1, 1, 1, 1)
-        
         grid.attach(Gtk.Label(label="Mot de passe :", xalign=0), 0, 2, 1, 1)
         entry_pwd = Gtk.Entry(); entry_pwd.set_visibility(False); grid.attach(entry_pwd, 1, 2, 1, 1)
-        
         grid.attach(Gtk.Label(label="Confirmer le mot de passe :", xalign=0), 0, 3, 1, 1)
         entry_pwd_confirm = Gtk.Entry(); entry_pwd_confirm.set_visibility(False); grid.attach(entry_pwd_confirm, 1, 3, 1, 1)
-        
         content.append(grid)
-        
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         btn_box.set_halign(Gtk.Align.END)
         btn_cancel = Gtk.Button(label="Annuler")
         btn_create = Gtk.Button(label="✅ Créer", css_classes=["suggested-action"])
         btn_box.append(btn_cancel); btn_box.append(btn_create)
         content.append(btn_box)
-        
         def on_create(*_):
             username = entry_user.get_text().strip()
             email = entry_email.get_text().strip()
             pwd = entry_pwd.get_text()
             pwd_confirm = entry_pwd_confirm.get_text()
-            
             if not username or not pwd:
                 self.show_toast("❌ Le nom d'utilisateur et le mot de passe sont requis")
                 return
             if pwd != pwd_confirm:
                 self.show_toast("❌ Les mots de passe ne correspondent pas")
                 return
-                
             mp = self._manage_path()
             if not mp: return
-            
             self.terminal._log(f"▶ Création du superutilisateur: {username}")
-            extra_env = {
-                "DJANGO_SUPERUSER_USERNAME": username,
-                "DJANGO_SUPERUSER_EMAIL": email,
-                "DJANGO_SUPERUSER_PASSWORD": pwd
-            }
+            extra_env = {"DJANGO_SUPERUSER_USERNAME": username, "DJANGO_SUPERUSER_EMAIL": email, "DJANGO_SUPERUSER_PASSWORD": pwd}
             self._run_cmd([sys.executable, str(mp), "createsuperuser", "--noinput"], cwd=str(mp.parent), extra_env=extra_env)
             dialog.destroy()
-            
         btn_create.connect("clicked", on_create)
         btn_cancel.connect("clicked", lambda *_: dialog.destroy())
         dialog.present()
