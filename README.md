@@ -49,16 +49,14 @@ C'est ce qu'on appelle une "Capsule Gykhamine". C'est un projet Django pré-conf
 
 <h2 id="3-linstallation-sans-mal-de-tête">2. L'installation sans mal de tête</h2>
 
-Ouvrez votre terminal. Sur Linux, c'est l'application "Terminal". Sur Windows avec WSL, ouvrez l'application "Ubuntu" ou "WSL". C'est cette fenêtre noire où l'on tape du texte. Respirez un grand coup, on y va étape par étape.
-
-
 <h3>Étape A : Récupérer le Studio et le Projet</h3>
 Maintenant, il faut télécharger le logiciel lui-même et le projet Boutique ERP.
 
 <ol>
   
-  <li>Allez sur la page <b>https://github.com/gykhamine/Gykhamine</b>.</li>
+  <li>Allez sur la page <ahref="https://github.com/gykhamine/Gykhamine"><b>https://github.com/gykhamine/Gykhamine</b></a></li></>
   <li>Cliquez sur le bouton vert "Code", puis "Download ZIP".</li>
+  <li>Allez sur la page <ahref="[https://github.com/gykhamine/Boutique_erp"><b>https://github.com/gykhamine/Boutique_erp</b></a></li></>
   <li>Allez sur la page <b>https://github.com/gykhamine/Boutique_erp</b>.</li>
   <li>Cliquez sur le bouton vert "Code", puis "Download ZIP".</li>
   
