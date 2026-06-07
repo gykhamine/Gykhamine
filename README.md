@@ -67,7 +67,7 @@ Maintenant, il faut télécharger le logiciel lui-même et le projet Boutique ER
 <h3>Étape B : Lancer la machine</h3>
 Une fois que vous êtes dans le dossier du projet (votre terminal doit afficher quelque chose qui se termine par <code>./Gykhamine $</code>), tapez simplement :
 
-<code>python3 gy.py</code>
+<code>python 1/gy.py</code>
 
 Si tout s'est bien passé, une belle fenêtre sombre avec le logo Gykhamine apparaît. Vous êtes dedans.
 Notons que nous travaillons pour rendre ce proces aussi simple que possible dans le temps.
