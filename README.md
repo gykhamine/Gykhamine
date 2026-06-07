@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="logo.png" alt="Logo Gykhamine Studio" width="150" style="margin-bottom: 10px;" />
+  <img src="Gykhamine/logo.png" alt="Logo Gykhamine Studio" width="150" style="margin-bottom: 10px;" />
   <h1>Gykhamine Studio</h1>
   <p><i>Le tableau de bord visuel pour piloter vos projets Django sans toucher au code.</i></p>
   <p>Développé pour le projet GCI — Brazzaville, Congo.</p>
@@ -46,52 +46,33 @@ Tout le code de ce projet de référence est hébergé ici : <b>https://github.c
 
 C'est ce qu'on appelle une "Capsule Gykhamine". C'est un projet Django pré-configuré, propre, et prêt à être modifié via le Studio. Votre rôle n'est pas de réinventer la roue, mais de personnaliser cette boutique, d'ajouter des fonctionnalités spécifiques à votre contexte local à Brazzaville, ou de corriger des bugs visuels. Le Studio est la télécommande de ce projet.
 
-<h2 id="2-ce-quil-vous-faut-vraiment">2. Ce qu'il vous faut vraiment</h2>
 
-Avant de télécharger quoi que ce soit, il faut s'assurer que votre ordinateur est prêt. Le Studio utilise des technologies graphiques très récentes (GTK4 et Libadwaita) pour avoir une interface moderne et fluide. 
-
-Voici la réalité technique : ces bibliothèques sont natives de l'environnement Linux. 
-
-<ul>
-  <li><b>Si vous êtes sur Linux</b> (Ubuntu, Debian, Mint, etc.) : Vous êtes parfait. C'est fait pour vous.</li>
-  <li><b>Si vous êtes sur Windows</b> : Ne paniquez pas, vous n'avez pas besoin de changer d'ordinateur. Vous devez juste activer une fonctionnalité gratuite de Microsoft appelée WSL (Windows Subsystem for Linux). Cela crée un petit Linux virtuel à l'intérieur de votre Windows. C'est officiel, sécurisé, et ça marche très bien.</li>
-  <li><b>Si vous êtes sur Mac</b> : C'est compliqué. Les bibliothèques Libadwaita ne sont pas nativement supportées sur macOS sans une installation très lourde de type Homebrew et XQuartz. Je vous conseille vivement d'utiliser une machine virtuelle Linux ou un PC sous Windows avec WSL.</li>
-</ul>
-
-<h2 id="3-linstallation-sans-mal-de-tête">3. L'installation sans mal de tête</h2>
+<h2 id="3-linstallation-sans-mal-de-tête">2. L'installation sans mal de tête</h2>
 
 Ouvrez votre terminal. Sur Linux, c'est l'application "Terminal". Sur Windows avec WSL, ouvrez l'application "Ubuntu" ou "WSL". C'est cette fenêtre noire où l'on tape du texte. Respirez un grand coup, on y va étape par étape.
 
-<h3>Étape A : Installer les composants graphiques</h3>
-Le Studio a besoin de savoir comment dessiner ses fenêtres et ses boutons sur votre écran. Tapez cette commande exactement comme elle est écrite, puis appuyez sur la touche "Entrée" de votre clavier :
 
-<code>sudo apt update && sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-pil git</code>
+<h3>Étape A : Récupérer le Studio et le Projet</h3>
+Maintenant, il faut télécharger le logiciel lui-même et le projet Boutique ERP.
 
-Le système va vous demander votre mot de passe. Quand vous le taperez, rien ne s'affichera à l'écran (pas d'étoiles, pas de points). C'est une sécurité normale de Linux. Tapez-le aveuglément et appuyez sur Entrée. Laissez le système télécharger et installer les pièces. Ça peut prendre deux minutes.
-
-<h3>Étape B : Récupérer le Studio et le Projet</h3>
-Maintenant, il faut télécharger le logiciel lui-même et le projet Boutique ERP. Le plus simple est de passer par le terminal pour éviter les histoires de chemins de fichiers. Tapez ces commandes une par une :
-
-<code>cd ~</code>
-<br>
-<code>git clone https://github.com/gykhamine/Boutique_erp.git</code>
-<br>
-<code>cd Boutique_erp</code>
-
-Si vous n'avez pas Git ou si vous préférez le faire à la souris :
 <ol>
+  
+  <li>Allez sur la page <b>https://github.com/gykhamine/Gykhamine</b>.</li>
+  <li>Cliquez sur le bouton vert "Code", puis "Download ZIP".</li>
   <li>Allez sur la page <b>https://github.com/gykhamine/Boutique_erp</b>.</li>
   <li>Cliquez sur le bouton vert "Code", puis "Download ZIP".</li>
+  
   <li>Décompressez le fichier ZIP dans votre dossier personnel.</li>
   <li>Ouvrez votre terminal, tapez <code>cd </code> (avec un espace après cd), puis glissez-déposez le dossier décompressé dans le terminal. Appuyez sur Entrée.</li>
 </ol>
 
-<h3>Étape C : Lancer la machine</h3>
-Une fois que vous êtes dans le dossier du projet (votre terminal doit afficher quelque chose qui se termine par <code>Boutique_erp$</code>), tapez simplement :
+<h3>Étape B : Lancer la machine</h3>
+Une fois que vous êtes dans le dossier du projet (votre terminal doit afficher quelque chose qui se termine par <code>./Gykhamine $</code>), tapez simplement :
 
 <code>python3 gy.py</code>
 
 Si tout s'est bien passé, une belle fenêtre sombre avec le logo Gykhamine apparaît. Vous êtes dedans.
+Notons que nous travaillons pour rendre ce proces aussi simple que possible dans le temps.
 
 <h2 id="4-tour-de-propriétaire-linterface">4. Tour de propriétaire : l'interface</h2>
 
