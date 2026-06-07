@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="Gykhamine/logo.png" alt="Logo Gykhamine Studio" width="150" style="margin-bottom: 10px;" />
+  <img src="Gykhamine/1/logo.png" alt="Logo Gykhamine Studio" width="150" style="margin-bottom: 10px;" />
   <h1>Gykhamine Studio</h1>
   <p><i>Le tableau de bord visuel pour piloter vos projets Django sans toucher au code.</i></p>
   <p>Développé pour le projet GCI — Brazzaville, Congo.</p>
