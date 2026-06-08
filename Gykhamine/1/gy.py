@@ -33,6 +33,7 @@ VERSION  = "2.6.1"
 SCRIPT_DIR = Path(__file__).parent.resolve()
 LOGO_PATH  = SCRIPT_DIR / "logo.png"
 DB_PATH    = Path.home() / ".config" / "gykhamine_studio.db"
+
 DEFAULT_CONFIG = {
     "llama_server_path": "/usr/local/bin/llama-server",
     "llama_model_path":  "/models/qwen2.5-coder.gguf",
@@ -75,6 +76,28 @@ DEFAULT_CONFIG = {
     "nfs_client_server_ip":   "192.168.1.10",
     "nfs_client_export_dir":  "/srv/nfs",
     "nfs_client_mount_point": str(Path.home() / "nfs_mount"),
+    
+    # === Configuration Nginx ===
+    "nginx_conf_path":        "/etc/nginx/nginx.conf",
+    "nginx_mode":             "reverse_proxy",
+    "nginx_server_name":      "localhost",
+    "nginx_listen_port":      "443",
+    "nginx_upstream_name":    "gunicorn",
+    "nginx_upstream_servers": "127.0.0.1:8000, 127.0.0.1:8001, 127.0.0.1:8002",
+    "nginx_proxy_pass":       "http://gunicorn",
+    "nginx_force_https":      True,
+    "nginx_ssl_cert":         "/etc/pki/nginx/server.crt",
+    "nginx_ssl_key":          "/etc/pki/nginx/private/server.key",
+    "nginx_static_url":       "/static/",
+    "nginx_static_path":      "/chemin/vers/ton/projet/static/",
+    "nginx_media_url":        "/media/",
+    "nginx_media_path":       "/chemin/vers/ton/projet/media/",
+    "nginx_max_body":         "20M",
+    "nginx_read_timeout":     "60s",
+    "nginx_connect_timeout":  "60s",
+    "nginx_proxy_buffering":  True,
+    "nginx_security_headers": True,
+    "nginx_custom_redirects": "/ancien -> /nouveau\n",
 }
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -198,7 +221,6 @@ def apply_syntax_highlighting(textview, lang):
         if len(props) > 1 and props[1] != Pango.Weight.NORMAL: tag.set_property("weight", props[1])
         if len(props) > 2 and props[2]: tag.set_property("style", Pango.Style.ITALIC)
         if not tag_table.lookup(name): tag_table.add(tag)
-    
     for tag_name in colors.keys(): buf.remove_tag_by_name(tag_name, buf.get_start_iter(), buf.get_end_iter())
     
     patterns = []
@@ -289,17 +311,17 @@ def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
         if not current_lines: return
         raw = "".join(current_lines)
         if raw.strip(): blocks.append({"type": current_type, "name": current_name, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
-        current_lines, current_start = [], i
+        current_lines, current_start, current_type, current_name = [], i, "template_part", "Template"
 
     while i < len(lines):
         line = lines[i]; stripped = line.strip()
         m = re.match(r'\{%-?\s*block\s+(\w+).*?%\}', stripped, re.IGNORECASE)
         if m: flush(); current_type, current_name, current_start = "django_block", f"block: {m.group(1)}", i; current_lines.append(line); i += 1; continue
-        if re.match(r'\{%-?\s*endblock\b', stripped, re.IGNORECASE): current_lines.append(line); flush(); current_type, current_name, current_start = "template_part", "Template", i + 1; i += 1; continue
+        if re.match(r'\{%-?\s*endblock\b', stripped, re.IGNORECASE): current_lines.append(line); flush(); current_start = i + 1; i += 1; continue
         if re.match(r'<style(\s[^>]*)?>$', stripped, re.IGNORECASE): flush(); current_type, current_name, current_start = "style", "CSS Block (<style>)", i; current_lines.append(line); i += 1; continue
-        if re.match(r'</style\s*>', stripped, re.IGNORECASE): current_lines.append(line); flush(); current_type, current_name, current_start = "template_part", "Template", i + 1; i += 1; continue
+        if re.match(r'</style\s*>', stripped, re.IGNORECASE): current_lines.append(line); flush(); current_start = i + 1; i += 1; continue
         if re.match(r'<script(\s[^>]*)?>$', stripped, re.IGNORECASE): flush(); current_type, current_name, current_start = "script", "JS Block (<script>)", i; current_lines.append(line); i += 1; continue
-        if re.match(r'</script\s*>', stripped, re.IGNORECASE): current_lines.append(line); flush(); current_type, current_name, current_start = "template_part", "Template", i + 1; i += 1; continue
+        if re.match(r'</script\s*>', stripped, re.IGNORECASE): current_lines.append(line); flush(); current_start = i + 1; i += 1; continue
         current_lines.append(line); i += 1
     flush()
     return blocks
@@ -651,11 +673,9 @@ class TerminalPanel(Gtk.Box):
         spacer = Gtk.Box(); spacer.set_hexpand(True); header.append(spacer)
         btn_clear = Gtk.Button(label="🗑 Clear"); btn_clear.add_css_class("ctrl-btn-small"); btn_clear.connect("clicked", lambda *_: self.log_view.get_buffer().set_text(""))
         header.append(btn_clear); self.append(header); self.append(Gtk.Separator())
-        
         self.log_view = Gtk.TextView(); self.log_view.set_editable(False); self.log_view.set_monospace(True); self.log_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR); self.log_view.set_cursor_visible(False); self.log_view.add_css_class("log-view")
         log_scroll = Gtk.ScrolledWindow(); log_scroll.set_hexpand(True); log_scroll.set_vexpand(True); log_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC); log_scroll.set_child(self.log_view)
         self.append(log_scroll)
-        
         term_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6); term_box.set_margin_top(4); term_box.set_margin_bottom(4); term_box.set_margin_start(8); term_box.set_margin_end(8)
         term_box.append(Gtk.Label(label="➜", css_classes=["terminal-prompt"]))
         self.cmd_entry = Gtk.Entry(); self.cmd_entry.set_placeholder_text("Enter a command..."); self.cmd_entry.set_hexpand(True); self.cmd_entry.add_css_class("terminal-input"); self.cmd_entry.connect("activate", self._run_custom_command)
@@ -730,30 +750,41 @@ class ControlPanel(Gtk.Box):
         # === GESTION POSTGRESQL ===
         sep_pg = Gtk.Separator(); sep_pg.set_margin_top(8); sep_pg.set_margin_bottom(4); self.append(sep_pg)
         lbl_pg = Gtk.Label(label="🐘 Gestion PostgreSQL"); lbl_pg.add_css_class("control-section-title"); lbl_pg.set_xalign(0); self.append(lbl_pg)
-        pg_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        btn_init = Gtk.Button(label="🔧 1. Initialiser (initdb & mount)"); btn_init.add_css_class("ctrl-btn"); btn_init.set_hexpand(True); btn_init.connect("clicked", self._run_pg_initdb); pg_box.append(btn_init)
-        btn_create = Gtk.Button(label="➕ 2. Créer Base & Utilisateur"); btn_create.add_css_class("ctrl-btn"); btn_create.set_hexpand(True); btn_create.connect("clicked", self._run_pg_creatdb); pg_box.append(btn_create)
-        btn_start = Gtk.Button(label="🚀 3. Démarrer & Configurer IP"); btn_start.add_css_class("ctrl-btn"); btn_start.set_hexpand(True); btn_start.connect("clicked", self._run_pg_rundb); pg_box.append(btn_start)
-        btn_stop = Gtk.Button(label="🛑 4. Arrêter la Base de données"); btn_stop.add_css_class("ctrl-btn-warn"); btn_stop.set_hexpand(True); btn_stop.connect("clicked", self._run_pg_stopdb); pg_box.append(btn_stop)
-        self.append(pg_box)
-        # ============================================
-
+        
+        pg_config_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_init = Gtk.Button(label="🔧 Init"); btn_init.add_css_class("ctrl-btn"); btn_init.set_hexpand(True); btn_init.connect("clicked", self._run_pg_initdb); pg_config_box.append(btn_init)
+        btn_create = Gtk.Button(label="➕ Créer DB"); btn_create.add_css_class("ctrl-btn"); btn_create.set_hexpand(True); btn_create.connect("clicked", self._run_pg_creatdb); pg_config_box.append(btn_create)
+        self.append(pg_config_box)
+        
+        self._add_custom_service_row("postgresql", "▶ Démarrer & Configurer", self._run_pg_rundb, self._run_pg_stopdb)
+        
         # === GESTION REDIS ===
         sep_redis = Gtk.Separator(); sep_redis.set_margin_top(8); sep_redis.set_margin_bottom(4); self.append(sep_redis)
         lbl_redis = Gtk.Label(label="🔴 Gestion Redis"); lbl_redis.add_css_class("control-section-title"); lbl_redis.set_xalign(0); self.append(lbl_redis)
         self._add_custom_service_row("redis", "▶ Démarrer Redis", self._run_redis_start, self._run_redis_stop)
-        # ============================================
-
+        
         # === GESTION NFS SERVEUR ===
         sep_nfs_s = Gtk.Separator(); sep_nfs_s.set_margin_top(8); sep_nfs_s.set_margin_bottom(4); self.append(sep_nfs_s)
         lbl_nfs_s = Gtk.Label(label="📁 NFS Serveur"); lbl_nfs_s.add_css_class("control-section-title"); lbl_nfs_s.set_xalign(0); self.append(lbl_nfs_s)
         self._add_custom_service_row("nfs_server", "▶ Démarrer Serveur", self._run_nfs_server_start, self._run_nfs_server_stop)
-        # ============================================
-
+        
         # === GESTION NFS CLIENT ===
         sep_nfs_c = Gtk.Separator(); sep_nfs_c.set_margin_top(8); sep_nfs_c.set_margin_bottom(4); self.append(sep_nfs_c)
         lbl_nfs_c = Gtk.Label(label="💻 NFS Client"); lbl_nfs_c.add_css_class("control-section-title"); lbl_nfs_c.set_xalign(0); self.append(lbl_nfs_c)
         self._add_custom_service_row("nfs_client", "📥 Monter le partage", self._run_nfs_client_mount, self._run_nfs_client_umount)
+        
+        # ============================================
+        # === GESTION NGINX ===
+        sep_nginx = Gtk.Separator(); sep_nginx.set_margin_top(8); sep_nginx.set_margin_bottom(4); self.append(sep_nginx)
+        lbl_nginx = Gtk.Label(label="🌐 Gestion Nginx"); lbl_nginx.add_css_class("control-section-title"); lbl_nginx.set_xalign(0); self.append(lbl_nginx)
+        
+        nginx_ctrl_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_nginx_config = Gtk.Button(label="⚙ Configurer"); btn_nginx_config.add_css_class("ctrl-btn"); btn_nginx_config.set_hexpand(True); btn_nginx_config.connect("clicked", self._show_nginx_config_dialog)
+        btn_nginx_restart = Gtk.Button(label="🔄 Redémarrer"); btn_nginx_restart.add_css_class("ctrl-btn-warn"); btn_nginx_restart.set_hexpand(True); btn_nginx_restart.connect("clicked", self._run_nginx_restart)
+        nginx_ctrl_box.append(btn_nginx_config); nginx_ctrl_box.append(btn_nginx_restart)
+        self.append(nginx_ctrl_box)
+        
+        self._add_custom_service_row("nginx", "▶ Démarrer Nginx", self._run_nginx_start, self._run_nginx_stop)
         # ============================================
         
         sep2 = Gtk.Separator(); sep2.set_margin_top(8); sep2.set_margin_bottom(4); self.append(sep2)
@@ -787,7 +818,6 @@ class ControlPanel(Gtk.Box):
         row.append(dot); row.append(btn_start); row.append(btn_stop); self.append(row)
 
     def _add_custom_service_row(self, name, label, start_cb, stop_cb):
-        """Variante pour les services système (Redis/NFS) qui ne sont pas gérés par subprocess.Popen direct"""
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self._status_dots = getattr(self, "_status_dots", {})
         dot = Gtk.Label(label="⬤"); dot.add_css_class("status-dot-off"); self._status_dots[name] = dot
@@ -973,9 +1003,9 @@ class ControlPanel(Gtk.Box):
             dialog.destroy()
         btn_open.connect("clicked", on_open); btn_cancel.connect("clicked", lambda *_: dialog.destroy()); dialog.present()
 
-    # ═══════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════
     #  GESTION POSTGRESQL INTÉGRÉE
-    # ═══════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════
     def _run_pg_initdb(self, *_):
         cfg = self.get_config()
         device = cfg.get("pg_device", "/dev/sda3")
@@ -991,7 +1021,6 @@ class ControlPanel(Gtk.Box):
                     GLib.idle_add(self.terminal._log, f"▶ Montage de {device} sur {mount_point}")
                     subprocess.run(["sudo", "mount", device, mount_point], check=True)
                 else: GLib.idle_add(self.terminal._log, "✅ Déjà monté")
-                
                 pg_version_path = Path(mount_point) / "PG_VERSION"
                 if not pg_version_path.exists():
                     GLib.idle_add(self.terminal._log, "▶ Initialisation de la base (initdb)...")
@@ -999,14 +1028,12 @@ class ControlPanel(Gtk.Box):
                     subprocess.run(["sudo", "chmod", "700", mount_point], check=True)
                     subprocess.run(["sudo", "-u", "postgres", "initdb", "-D", mount_point], check=True)
                 else: GLib.idle_add(self.terminal._log, "✅ Base de données déjà initialisée")
-                
                 GLib.idle_add(self.terminal._log, "▶ Démarrage de PostgreSQL...")
                 status = subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", mount_point, "status"], capture_output=True)
                 if status.returncode != 0:
                     subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", mount_point, "start"], check=True)
                     GLib.idle_add(self.terminal._log, "✅ PostgreSQL démarré")
                 else: GLib.idle_add(self.terminal._log, "✅ PostgreSQL déjà en cours d'exécution")
-                
                 GLib.idle_add(self.show_toast, "✅ Initialisation PostgreSQL réussie")
                 GLib.idle_add(self.terminal._log, "=== OK ===")
             except subprocess.CalledProcessError as e:
@@ -1029,18 +1056,15 @@ class ControlPanel(Gtk.Box):
                     GLib.idle_add(self.terminal._log, f"▶ Création de l'utilisateur {db_user}")
                     subprocess.run(["sudo", "-u", "postgres", "psql", "-c", f"CREATE USER {db_user} WITH PASSWORD '{db_password}';"], check=True)
                 else: GLib.idle_add(self.terminal._log, "✅ Utilisateur déjà existant")
-                
                 check_db = subprocess.run(["sudo", "-u", "postgres", "psql", "-tAc", f"SELECT 1 FROM pg_database WHERE datname='{db_name}'"], capture_output=True, text=True).stdout.strip()
                 if check_db != "1":
                     GLib.idle_add(self.terminal._log, f"▶ Création de la base {db_name}")
                     subprocess.run(["sudo", "-u", "postgres", "createdb", "-O", db_user, db_name], check=True)
                 else: GLib.idle_add(self.terminal._log, "✅ Base déjà existante")
-                
                 GLib.idle_add(self.terminal._log, "▶ Attribution des privilèges...")
                 subprocess.run(["sudo", "-u", "postgres", "psql", "-c", f"GRANT ALL PRIVILEGES ON DATABASE {db_name} TO {db_user};"], check=True)
                 subprocess.run(["sudo", "-u", "postgres", "psql", "-d", db_name, "-c", f"GRANT USAGE, CREATE ON SCHEMA public TO {db_user};"], check=True)
                 subprocess.run(["sudo", "-u", "postgres", "psql", "-d", db_name, "-c", f"ALTER SCHEMA public OWNER TO {db_user};"], check=True)
-                
                 GLib.idle_add(self.show_toast, "✅ Base et utilisateur configurés")
                 GLib.idle_add(self.terminal._log, "=== OK ===")
             except subprocess.CalledProcessError as e:
@@ -1056,7 +1080,6 @@ class ControlPanel(Gtk.Box):
         pgdata = cfg.get("pg_mount_point", "/var/lib/pgsql/data")
         bind_ip = cfg.get("pg_bind_ip", "127.0.0.1")
         listen_addr = "*" if bind_ip == "0.0.0.0" else bind_ip
-        
         self.terminal._log("🚀 === Démarrage et Configuration IP ===")
         def _thread():
             try:
@@ -1065,21 +1088,17 @@ class ControlPanel(Gtk.Box):
                 if mount_check.returncode != 0:
                     GLib.idle_add(self.terminal._log, f"▶ Montage de {device} sur {pgdata}")
                     subprocess.run(["sudo", "mount", device, pgdata], check=True)
-                else: 
+                else:
                     GLib.idle_add(self.terminal._log, "✅ Déjà monté")
-                
                 status = subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", pgdata, "status"], capture_output=True)
                 is_running = (status.returncode == 0)
-                
                 if not is_running:
                     GLib.idle_add(self.terminal._log, "▶ Démarrage de PostgreSQL...")
                     subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", pgdata, "start"], check=True)
-                else: 
+                else:
                     GLib.idle_add(self.terminal._log, "✅ PostgreSQL déjà en cours d'exécution")
-                
                 GLib.idle_add(self.terminal._log, f"▶ Configuration de listen_addresses sur '{listen_addr}'...")
                 subprocess.run(["sudo", "-u", "postgres", "psql", "-c", f"ALTER SYSTEM SET listen_addresses = '{listen_addr}';"], check=True)
-                
                 if bind_ip == "0.0.0.0":
                     pg_hba_path = Path(pgdata) / "pg_hba.conf"
                     GLib.idle_add(self.terminal._log, "🌐 Mode Réseau détecté. Automatisation de pg_hba.conf...")
@@ -1091,12 +1110,11 @@ class ControlPanel(Gtk.Box):
                         GLib.idle_add(self.terminal._log, "✅ Règle pg_hba.conf ajoutée avec succès.")
                     else:
                         GLib.idle_add(self.terminal._log, "✅ La règle d'accès distant est déjà présente dans pg_hba.conf.")
-                
                 GLib.idle_add(self.terminal._log, "▶ Redémarrage propre pour appliquer la configuration...")
                 subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", pgdata, "restart", "-m", "fast"], check=True)
-                
                 GLib.idle_add(self.show_toast, "✅ PostgreSQL démarré et IP configurée")
                 GLib.idle_add(self.terminal._log, "=== READY ===")
+                GLib.idle_add(self._set_dot, "postgresql", True)
             except subprocess.CalledProcessError as e:
                 GLib.idle_add(self.terminal._log, f"❌ Erreur: {e}")
                 GLib.idle_add(self.show_toast, "❌ Échec du démarrage/config")
@@ -1114,6 +1132,7 @@ class ControlPanel(Gtk.Box):
                 subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", pgdata, "stop", "-m", "fast"], check=True)
                 GLib.idle_add(self.show_toast, "✅ PostgreSQL arrêté avec succès")
                 GLib.idle_add(self.terminal._log, "=== STOPPED ===")
+                GLib.idle_add(self._set_dot, "postgresql", False)
             except subprocess.CalledProcessError as e:
                 GLib.idle_add(self.terminal._log, f"❌ Erreur lors de l'arrêt: {e}")
                 GLib.idle_add(self.show_toast, "❌ Échec de l'arrêt")
@@ -1121,9 +1140,9 @@ class ControlPanel(Gtk.Box):
                 GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
         threading.Thread(target=_thread, daemon=True).start()
 
-    # ═══════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════
     #  GESTION REDIS INTÉGRÉE
-    # ═══════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════
     def _run_redis_start(self, *_):
         cfg = self.get_config()
         redis_ip = cfg.get("redis_ip", "127.0.0.1")
@@ -1132,7 +1151,6 @@ class ControlPanel(Gtk.Box):
         use_persistence = cfg.get("redis_use_persistence", True)
         env_path = cfg.get("redis_env_path", "")
         update_env = cfg.get("redis_update_env", False)
-
         self.terminal._log("🔴 === Démarrage de Redis ===")
         def _thread():
             try:
@@ -1150,13 +1168,11 @@ class ControlPanel(Gtk.Box):
                     GLib.idle_add(self.terminal._log, f"✅ REDIS_URL synchronisé : {redis_url}")
                 elif update_env:
                     GLib.idle_add(self.terminal._log, f"⚠ Fichier .env introuvable à : {env_path}")
-
                 if use_persistence:
                     os.makedirs(data_dir, exist_ok=True)
                     cmd = f"redis-server --bind {redis_ip} --port {redis_port} --dir {data_dir} --appendonly yes --daemonize yes"
                 else:
                     cmd = f"redis-server --bind {redis_ip} --port {redis_port} --daemonize yes"
-                
                 GLib.idle_add(self.terminal._log, f"▶ Exécution : {cmd}")
                 status = os.system(cmd)
                 if status == 0:
@@ -1189,22 +1205,20 @@ class ControlPanel(Gtk.Box):
                 GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
         threading.Thread(target=_thread, daemon=True).start()
 
-    # ═══════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════
     #  GESTION NFS INTÉGRÉE
-    # ═══════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════
     def _run_nfs_server_start(self, *_):
         cfg = self.get_config()
         export_dir = cfg.get("nfs_export_dir", "/run/media/gykhamine/GY/gy/media")
         mode = cfg.get("nfs_server_mode", "local")
         lan_network = cfg.get("nfs_lan_network", "192.168.1.0/24") if mode == "network" else "127.0.0.1"
-        
         self.terminal._log("📁 === Démarrage du Serveur NFS ===")
         def _thread():
             try:
                 GLib.idle_add(self.terminal._log, f"▶ Création du dossier d'export : {export_dir}")
                 subprocess.run(["mkdir", "-p", export_dir], check=True)
                 subprocess.run(["chmod", "777", export_dir], check=True)
-                
                 GLib.idle_add(self.terminal._log, "▶ Mise à jour de /etc/exports...")
                 exports_path = "/etc/exports"
                 try:
@@ -1212,20 +1226,15 @@ class ControlPanel(Gtk.Box):
                         lines = f.readlines()
                 except FileNotFoundError:
                     lines = []
-                
                 lines = [l for l in lines if not l.strip().startswith("# --- Gykhamine NFS ---") and not l.strip().startswith(export_dir)]
                 new_entry = f"# --- Gykhamine NFS ---\n{export_dir} {lan_network}(rw,sync,no_subtree_check,no_root_squash)\n"
                 lines.append(new_entry)
-                
                 content = "".join(lines)
                 subprocess.run(["sudo", "tee", exports_path], input=content, text=True, check=True)
-                
                 GLib.idle_add(self.terminal._log, "▶ Application de la configuration (exportfs -ra)...")
                 subprocess.run(["sudo", "exportfs", "-ra"], check=True)
-                
                 GLib.idle_add(self.terminal._log, "▶ Redémarrage du service nfs-server...")
                 subprocess.run(["sudo", "systemctl", "restart", "nfs-server.service"], check=True)
-                
                 GLib.idle_add(self._set_dot, "nfs_server", True)
                 GLib.idle_add(self.show_toast, "✅ Serveur NFS démarré")
                 GLib.idle_add(self.terminal._log, f"=== READY : Export {export_dir} vers {lan_network} ===")
@@ -1252,10 +1261,8 @@ class ControlPanel(Gtk.Box):
                     content = "".join(lines)
                     subprocess.run(["sudo", "tee", exports_path], input=content, text=True, check=True)
                 except Exception: pass
-                
                 subprocess.run(["sudo", "exportfs", "-ra"], check=True)
                 subprocess.run(["sudo", "systemctl", "stop", "nfs-server.service"], check=True)
-                
                 GLib.idle_add(self._set_dot, "nfs_server", False)
                 GLib.idle_add(self.show_toast, "✅ Serveur NFS arrêté")
                 GLib.idle_add(self.terminal._log, "=== STOPPED ===")
@@ -1268,22 +1275,18 @@ class ControlPanel(Gtk.Box):
         server_ip = cfg.get("nfs_client_server_ip", "192.168.1.10")
         export_dir = cfg.get("nfs_client_export_dir", "/srv/nfs")
         mount_point = cfg.get("nfs_client_mount_point", str(Path.home() / "nfs_mount"))
-        
         self.terminal._log("💻 === Montage Client NFS ===")
         def _thread():
             try:
                 subprocess.run(["mkdir", "-p", mount_point], check=True)
-                
                 GLib.idle_add(self.terminal._log, f"▶ Test de reachabilité du serveur {server_ip}...")
                 ping = subprocess.run(["ping", "-c", "1", "-W", "2", server_ip], capture_output=True)
                 if ping.returncode != 0:
                     GLib.idle_add(self.terminal._log, "❌ Serveur inaccessible, fallback local ou vérifiez l'IP.")
                     GLib.idle_add(self.show_toast, "❌ Serveur NFS injoignable")
                     return
-                
                 GLib.idle_add(self.terminal._log, f"▶ Montage de {server_ip}:{export_dir} sur {mount_point}...")
                 subprocess.run(["sudo", "mount", "-t", "nfs", f"{server_ip}:{export_dir}", mount_point], check=True)
-                
                 GLib.idle_add(self._set_dot, "nfs_client", True)
                 GLib.idle_add(self.show_toast, "✅ Partage NFS monté")
                 GLib.idle_add(self.terminal._log, f"=== MOUNTED : {mount_point} ===")
@@ -1313,9 +1316,338 @@ class ControlPanel(Gtk.Box):
                 GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
         threading.Thread(target=_thread, daemon=True).start()
 
-    # ═══════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════
+    #  GESTION NGINX INTÉGRÉE
+    # ═══════════════════════════════════════════════════════════
+    def _show_nginx_config_dialog(self, *_):
+        cfg = self.get_config()
+        dialog = Gtk.Dialog(title="⚙ Configuration Avancée Nginx", transient_for=self.get_root())
+        dialog.set_default_size(600, 700)
+        content = dialog.get_content_area()
+        content.set_spacing(10)
+        set_margins(content, 16)
+        
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_vexpand(True)
+        
+        grid = Gtk.Grid()
+        grid.set_row_spacing(8)
+        grid.set_column_spacing(8)
+        row = 0
+        
+        # --- Section 1: Général ---
+        lbl_sec1 = Gtk.Label(label="🌐 Configuration Générale", css_classes=["control-section-title"], xalign=0, margin_bottom=4)
+        grid.attach(lbl_sec1, 0, row, 2, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Mode :", xalign=0), 0, row, 1, 1)
+        combo_mode = Gtk.ComboBoxText()
+        combo_mode.append_text("Reverse Proxy (Simple)")
+        combo_mode.append_text("Load Balancer (Répartition de charge)")
+        combo_mode.set_active(0 if cfg.get("nginx_mode") == "reverse_proxy" else 1)
+        grid.attach(combo_mode, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Nom de domaine (server_name) :", xalign=0), 0, row, 1, 1)
+        entry_name = Gtk.Entry(); entry_name.set_text(cfg.get("nginx_server_name", "localhost")); grid.attach(entry_name, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Port d'écoute HTTPS :", xalign=0), 0, row, 1, 1)
+        entry_port = Gtk.Entry(); entry_port.set_text(cfg.get("nginx_listen_port", "443")); grid.attach(entry_port, 1, row, 1, 1); row += 1
+        
+        row_force = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row_force.append(Gtk.Label(label="Forcer HTTPS (Redirect 80 -> 443) :", xalign=0))
+        sw_force = Gtk.Switch(); sw_force.set_active(cfg.get("nginx_force_https", True)); row_force.append(sw_force)
+        grid.attach(row_force, 0, row, 2, 1); row += 1
+        
+        # --- Section 2: Backend & Redirections ---
+        lbl_sec2 = Gtk.Label(label="🔀 Backend & Redirections", css_classes=["control-section-title"], xalign=0, margin_top=8, margin_bottom=4)
+        grid.attach(lbl_sec2, 0, row, 2, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Serveurs Backend (séparés par virgule) :", xalign=0), 0, row, 1, 1)
+        entry_upstream = Gtk.Entry(); entry_upstream.set_text(cfg.get("nginx_upstream_servers", "127.0.0.1:8000, 127.0.0.1:8001"))
+        entry_upstream.set_tooltip_text("Ex: 127.0.0.1:8000, 127.0.0.1:8001")
+        grid.attach(entry_upstream, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="URL de redirection (proxy_pass) :", xalign=0), 0, row, 1, 1)
+        entry_proxy = Gtk.Entry(); entry_proxy.set_text(cfg.get("nginx_proxy_pass", "http://gunicorn")); grid.attach(entry_proxy, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Redirections personnalisées (une par ligne : /ancien -> /nouveau) :", xalign=0), 0, row, 2, 1); row += 1
+        txt_redirects = Gtk.TextView(); txt_redirects.set_wrap_mode(Gtk.WrapMode.WORD)
+        txt_redirects.get_buffer().set_text(cfg.get("nginx_custom_redirects", ""))
+        scroll_redirects = Gtk.ScrolledWindow(); scroll_redirects.set_size_request(-1, 60); scroll_redirects.set_child(txt_redirects)
+        grid.attach(scroll_redirects, 0, row, 2, 1); row += 1
+        
+        # --- Section 3: Fichiers Statiques & Médias ---
+        lbl_sec3 = Gtk.Label(label="📁 Liaison Django (Static & Media)", css_classes=["control-section-title"], xalign=0, margin_top=8, margin_bottom=4)
+        grid.attach(lbl_sec3, 0, row, 2, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="URL Static :", xalign=0), 0, row, 1, 1)
+        entry_s_url = Gtk.Entry(); entry_s_url.set_text(cfg.get("nginx_static_url", "/static/")); grid.attach(entry_s_url, 1, row, 1, 1); row += 1
+        grid.attach(Gtk.Label(label="Chemin local Static :", xalign=0), 0, row, 1, 1)
+        entry_s_path = Gtk.Entry(); entry_s_path.set_text(cfg.get("nginx_static_path", "/chemin/vers/ton/projet/static/")); grid.attach(entry_s_path, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="URL Media :", xalign=0), 0, row, 1, 1)
+        entry_m_url = Gtk.Entry(); entry_m_url.set_text(cfg.get("nginx_media_url", "/media/")); grid.attach(entry_m_url, 1, row, 1, 1); row += 1
+        grid.attach(Gtk.Label(label="Chemin local Media :", xalign=0), 0, row, 1, 1)
+        entry_m_path = Gtk.Entry(); entry_m_path.set_text(cfg.get("nginx_media_path", "/chemin/vers/ton/projet/media/")); grid.attach(entry_m_path, 1, row, 1, 1); row += 1
+        
+        # --- Section 4: SSL & Sécurité ---
+        lbl_sec4 = Gtk.Label(label="🔒 SSL & Sécurité", css_classes=["control-section-title"], xalign=0, margin_top=8, margin_bottom=4)
+        grid.attach(lbl_sec4, 0, row, 2, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Certificat SSL (.crt) :", xalign=0), 0, row, 1, 1)
+        entry_cert = Gtk.Entry(); entry_cert.set_text(cfg.get("nginx_ssl_cert", "/etc/pki/nginx/server.crt")); entry_cert.set_editable(False); entry_cert.add_css_class("dim-label"); grid.attach(entry_cert, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Clé Privée SSL (.key) :", xalign=0), 0, row, 1, 1)
+        entry_key = Gtk.Entry(); entry_key.set_text(cfg.get("nginx_ssl_key", "/etc/pki/nginx/private/server.key")); entry_key.set_editable(False); entry_key.add_css_class("dim-label"); grid.attach(entry_key, 1, row, 1, 1); row += 1
+        
+        row_sec = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        sw_headers = Gtk.Switch(); sw_headers.set_active(cfg.get("nginx_security_headers", True))
+        row_sec.append(Gtk.Label(label="En-têtes de sécurité (HSTS, X-Frame, etc.) :")); row_sec.append(sw_headers)
+        
+        sw_buffer = Gtk.Switch(); sw_buffer.set_active(cfg.get("nginx_proxy_buffering", True))
+        row_sec.append(Gtk.Label(label="Proxy Buffering :")); row_sec.append(sw_buffer)
+        grid.attach(row_sec, 0, row, 2, 1); row += 1
+        
+        # --- Section 5: Performances ---
+        lbl_sec5 = Gtk.Label(label="⚡ Performances & Timeouts", css_classes=["control-section-title"], xalign=0, margin_top=8, margin_bottom=4)
+        grid.attach(lbl_sec5, 0, row, 2, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Taille max upload (client_max_body_size) :", xalign=0), 0, row, 1, 1)
+        entry_max_body = Gtk.Entry(); entry_max_body.set_text(cfg.get("nginx_max_body", "20M")); grid.attach(entry_max_body, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Délai de connexion (proxy_connect_timeout) :", xalign=0), 0, row, 1, 1)
+        entry_conn_to = Gtk.Entry(); entry_conn_to.set_text(cfg.get("nginx_connect_timeout", "60s")); grid.attach(entry_conn_to, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Délai de lecture (proxy_read_timeout) :", xalign=0), 0, row, 1, 1)
+        entry_read_to = Gtk.Entry(); entry_read_to.set_text(cfg.get("nginx_read_timeout", "60s")); grid.attach(entry_read_to, 1, row, 1, 1); row += 1
+        
+        scroll.set_child(grid)
+        content.append(scroll)
+        
+        info_lbl = Gtk.Label(label="⚠️ Le fichier /etc/nginx/nginx.conf sera modifié directement. Assurez-vous que Nginx est installé.", css_classes=["dim-label"], margin_top=8, xalign=0)
+        content.append(info_lbl)
+        
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, halign=Gtk.Align.END, margin_top=12)
+        btn_cancel = Gtk.Button(label="Annuler")
+        btn_save = Gtk.Button(label="💾 Sauvegarder & Appliquer", css_classes=["suggested-action"])
+        btn_box.append(btn_cancel); btn_box.append(btn_save); content.append(btn_box)
+        
+        def on_save(*_):
+            mode = "reverse_proxy" if combo_mode.get_active() == 0 else "load_balancer"
+            new_cfg = {
+                "nginx_mode": mode,
+                "nginx_server_name": entry_name.get_text().strip(),
+                "nginx_listen_port": entry_port.get_text().strip(),
+                "nginx_force_https": sw_force.get_active(),
+                "nginx_upstream_servers": entry_upstream.get_text().strip(),
+                "nginx_proxy_pass": entry_proxy.get_text().strip(),
+                "nginx_custom_redirects": txt_redirects.get_buffer().get_text(txt_redirects.get_buffer().get_start_iter(), txt_redirects.get_buffer().get_end_iter(), True).strip(),
+                "nginx_static_url": entry_s_url.get_text().strip(),
+                "nginx_static_path": entry_s_path.get_text().strip(),
+                "nginx_media_url": entry_m_url.get_text().strip(),
+                "nginx_media_path": entry_m_path.get_text().strip(),
+                "nginx_ssl_cert": entry_cert.get_text().strip(),
+                "nginx_ssl_key": entry_key.get_text().strip(),
+                "nginx_security_headers": sw_headers.get_active(),
+                "nginx_proxy_buffering": sw_buffer.get_active(),
+                "nginx_max_body": entry_max_body.get_text().strip(),
+                "nginx_connect_timeout": entry_conn_to.get_text().strip(),
+                "nginx_read_timeout": entry_read_to.get_text().strip(),
+            }
+            cfg.update(new_cfg)
+            save_config(cfg)
+            self._update_nginx_conf()
+            self.show_toast("✅ Configuration Nginx sauvegardée et appliquée")
+            dialog.destroy()
+            
+        btn_save.connect("clicked", on_save)
+        btn_cancel.connect("clicked", lambda *_: dialog.destroy())
+        dialog.present()
+
+    def _update_nginx_conf(self, *_):
+        cfg = self.get_config()
+        conf_path = cfg.get("nginx_conf_path", "/etc/nginx/nginx.conf")
+        
+        try:
+            with open(conf_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # 1. Upstream Block
+            servers_list = [f"    server {s.strip()};" for s in cfg.get("nginx_upstream_servers", "127.0.0.1:8000").split(",") if s.strip()]
+            upstream_content = "\n".join(servers_list)
+            upstream_name = cfg.get("nginx_upstream_name", "gunicorn")
+            
+            if re.search(rf'upstream\s+{upstream_name}\s*\{{', content):
+                content = re.sub(rf'(upstream\s+{upstream_name}\s*\{{)(.*?)(\}})', rf'\1\n{upstream_content}\n\3', content, flags=re.DOTALL)
+            else:
+                upstream_block = f"upstream {upstream_name} {{\n    least_conn;\n{upstream_content}\n    keepalive 32;\n}}\n\n"
+                content = re.sub(r'(\s*# --- Redirection HTTP vers HTTPS ---\s*server\s*\{)', rf'{upstream_block}\1', content, count=1)
+
+            # 2. Server Name
+            content = re.sub(r'server_name\s+[^;]+;', f'server_name  {cfg.get("nginx_server_name", "localhost")};', content)
+
+            # 3. Listen Ports & Force HTTPS
+            force_https = cfg.get("nginx_force_https", True)
+            listen_port = cfg.get("nginx_listen_port", "443")
+            
+            if force_https:
+                http_redirect = f"""# --- Redirection HTTP vers HTTPS ---
+server {{
+    listen       80;
+    server_name  {cfg.get('nginx_server_name', 'localhost')};
+    return 301 https://$host$request_uri;
+}}"""
+                content = re.sub(r'# --- Redirection HTTP vers HTTPS ---\s*server\s*\{[^}]+\}', http_redirect, content, flags=re.DOTALL)
+            else:
+                http_block = f"""# --- Redirection HTTP vers HTTPS ---
+server {{
+    listen       80;
+    server_name  {cfg.get('nginx_server_name', 'localhost')};
+}}"""
+                content = re.sub(r'# --- Redirection HTTP vers HTTPS ---\s*server\s*\{[^}]+\}', http_block, content, flags=re.DOTALL)
+            
+            content = re.sub(r'listen\s+443\s+ssl\s+http2;', f'listen       {listen_port} ssl http2;', content)
+
+            # 4. SSL Certificates
+            ssl_cert = cfg.get("nginx_ssl_cert", "/etc/pki/nginx/server.crt")
+            ssl_key = cfg.get("nginx_ssl_key", "/etc/pki/nginx/private/server.key")
+            content = re.sub(r'ssl_certificate\s+[^;]+;', f'ssl_certificate  "{ssl_cert}";', content)
+            content = re.sub(r'ssl_certificate_key\s+[^;]+;', f'ssl_certificate_key  "{ssl_key}";', content)
+
+            # 5. Static and Media Locations
+            static_url = cfg.get("nginx_static_url", "/static/")
+            static_path = cfg.get("nginx_static_path", "/chemin/vers/ton/projet/static/")
+            content = re.sub(
+                r'# --- Fichiers Statiques ---\s*location\s+/static/\s*\{.*?\n\s*\}',
+                f"""# --- Fichiers Statiques ---
+    location {static_url} {{
+        alias {static_path};
+        expires 30d;
+        add_header Cache-Control "public, no-transform";
+        access_log off;
+    }}""",
+                content, flags=re.DOTALL
+            )
+
+            media_url = cfg.get("nginx_media_url", "/media/")
+            media_path = cfg.get("nginx_media_path", "/chemin/vers/ton/projet/media/")
+            content = re.sub(
+                r'# --- Fichiers Media \(Sécurisés\) ---\s*location\s+/media/\s*\{.*?\n\s*\}',
+                f"""# --- Fichiers Media (Sécurisés) ---
+    location {media_url} {{
+        alias {media_path};
+        # Empêche l'exécution de scripts malveillants uploadés
+        location ~* \.(php|py|pl|sh|cgi|exe)$ {{
+            deny all;
+        }}
+    }}""",
+                content, flags=re.DOTALL
+            )
+
+            # 6. Proxy Pass and Extra Configs
+            proxy_pass_url = cfg.get("nginx_proxy_pass", f"http://{upstream_name}")
+            max_body = cfg.get("nginx_max_body", "20M")
+            read_timeout = cfg.get("nginx_read_timeout", "60s")
+            connect_timeout = cfg.get("nginx_connect_timeout", "60s")
+            proxy_buffering = "on" if cfg.get("nginx_proxy_buffering", True) else "off"
+            
+            new_location = f"""# --- Proxy vers Gunicorn ---
+    location / {{
+        proxy_pass {proxy_pass_url};
+        
+        # Transmission correcte des informations client
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Configurations Proxy Avancées
+        proxy_connect_timeout {connect_timeout};
+        proxy_read_timeout {read_timeout};
+        proxy_buffering {proxy_buffering};
+
+        # Limite la taille des uploads
+        client_max_body_size {max_body};
+    }}"""
+            content = re.sub(r'# --- Proxy vers Gunicorn ---\s*location\s+/\s*\{.*?\n\s*\}', new_location, content, flags=re.DOTALL)
+
+            # 7. Security Headers Toggle
+            if not cfg.get("nginx_security_headers", True):
+                content = re.sub(r'^\s*add_header\s+[^;]+;\s*$', '', content, flags=re.MULTILINE)
+
+            # 8. Custom Redirects
+            custom_redirects = cfg.get("nginx_custom_redirects", "")
+            if custom_redirects.strip():
+                redirect_lines = []
+                for r in custom_redirects.split('\n'):
+                    if '->' in r:
+                        parts = r.split('->')
+                        redirect_lines.append(f"    rewrite ^{parts[0].strip()}$ {parts[1].strip()} permanent;")
+                if redirect_lines:
+                    redirect_block = "\n".join(redirect_lines) + "\n"
+                    content = re.sub(r'(# --- Proxy vers Gunicorn ---)', f'{redirect_block}\n\1', content)
+
+            # Save with sudo via tee
+            self.terminal._log("📝 Mise à jour de /etc/nginx/nginx.conf...")
+            proc = subprocess.run(["sudo", "tee", conf_path], input=content, text=True, capture_output=True)
+            if proc.returncode == 0:
+                self.terminal._log("✅ Fichier nginx.conf mis à jour avec succès.")
+            else:
+                self.terminal._log(f"❌ Erreur lors de l'écriture : {proc.stderr}")
+                
+        except Exception as e:
+            self.terminal._log(f"❌ Exception lors de la modification de nginx.conf : {e}")
+            self.show_toast("❌ Échec de la modification de nginx.conf")
+
+    def _run_nginx_start(self, *_):
+        self.terminal._log("🌐 === Démarrage de Nginx ===")
+        def _thread():
+            try:
+                self._update_nginx_conf()
+                self.terminal._log("▶ sudo systemctl start nginx")
+                subprocess.run(["sudo", "systemctl", "start", "nginx"], check=True)
+                GLib.idle_add(self._set_dot, "nginx", True)
+                GLib.idle_add(self.show_toast, "✅ Nginx démarré")
+                GLib.idle_add(self.terminal._log, "=== Nginx READY ===")
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self._set_dot, "nginx", False)
+                GLib.idle_add(self.terminal._log, f"❌ Erreur systemctl: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec du démarrage Nginx")
+            except Exception as e:
+                GLib.idle_add(self._set_dot, "nginx", False)
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_nginx_stop(self, *_):
+        self.terminal._log("🛑 === Arrêt de Nginx ===")
+        def _thread():
+            try:
+                subprocess.run(["sudo", "systemctl", "stop", "nginx"], check=True)
+                GLib.idle_add(self._set_dot, "nginx", False)
+                GLib.idle_add(self.show_toast, "✅ Nginx arrêté")
+                GLib.idle_add(self.terminal._log, "=== Nginx STOPPED ===")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_nginx_restart(self, *_):
+        self.terminal._log("🔄 === Redémarrage de Nginx ===")
+        def _thread():
+            try:
+                self._update_nginx_conf()
+                subprocess.run(["sudo", "systemctl", "restart", "nginx"], check=True)
+                GLib.idle_add(self._set_dot, "nginx", True)
+                GLib.idle_add(self.show_toast, "✅ Nginx redémarré")
+                GLib.idle_add(self.terminal._log, "=== Nginx RESTARTED ===")
+            except Exception as e:
+                GLib.idle_add(self._set_dot, "nginx", False)
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec du redémarrage")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    # ═══════════════════════════════════════════════════════════
     #  VISUALISATION DES DONNÉES ET EXPORT (TABLEAU RÉEL)
-    # ═══════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════
     def _show_db_stats(self, *_):
         mp = self._manage_path()
         if not mp:
@@ -1706,24 +2038,20 @@ class SettingsDialog(Adw.PreferencesDialog):
         grp = Adw.PreferencesGroup(title="🤖 llama.cpp"); page.add(grp); self._rows = {}
         for key, title, placeholder in [("llama_server_path", "llama-server path", "/usr/local/bin/llama-server"), ("llama_model_path", ".gguf model path", "/models/qwen2.5-coder.gguf"), ("llama_host", "Host", "127.0.0.1"), ("llama_port", "Port", "8080")]:
             row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, placeholder))); self._rows[key] = row; grp.add(row)
-        
         grp_ports = Adw.PreferencesGroup(title="🔌 Ports & Servers"); page.add(grp_ports)
         auto_port = Adw.SwitchRow(title="Auto-detect free ports"); auto_port.set_active(config.get("auto_find_free_port", True)); self._rows["auto_find_free_port"] = auto_port; grp_ports.add(auto_port)
         for key, title, default in [("default_port_range_start", "Range start", 8000), ("default_port_range_end", "Range end", 8010)]:
             row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, default))); self._rows[key] = row; grp_ports.add(row)
         gunicorn_row = Adw.EntryRow(title="Gunicorn bind address"); gunicorn_row.set_text(str(config.get("gunicorn_bind", "0.0.0.0:8000"))); gunicorn_row.set_tooltip_text("e.g., 0.0.0.0:8000, 0.0.0.0:80 or 0.0.0.0:443")
         self._rows["gunicorn_bind"] = gunicorn_row; grp_ports.add(gunicorn_row)
-        
         grp2 = Adw.PreferencesGroup(title="🌐 Options"); page.add(grp2)
         browser_switch = Adw.SwitchRow(title="Open browser automatically"); browser_switch.set_active(config.get("open_browser_on_run", True)); self._rows["open_browser_on_run"] = browser_switch; grp2.add(browser_switch)
         theme_row = Adw.ComboRow(title="Theme"); theme_row.set_model(Gtk.StringList.new(["Dark", "Light"])); theme_row.set_selected(0 if config.get("theme", "dark") == "dark" else 1); self._rows["theme"] = theme_row; grp2.add(theme_row)
-        
         grp_paths = Adw.PreferencesGroup(title="📁 File Paths"); page.add(grp_paths)
         log_row = DirectoryPickerRow(title="Log file (.log)", subtitle="Destination folder for logs", initial_value=config.get("log_file_path", DEFAULT_CONFIG["log_file_path"]), filename="studio.log")
         self._rows["log_file_path"] = log_row; grp_paths.add(log_row)
         db_row = DirectoryPickerRow(title="SQLite database (.db)", subtitle="Destination folder for the database", initial_value=config.get("db_path", DEFAULT_CONFIG["db_path"]), filename="gykhamine_studio.db")
         self._rows["db_path"] = db_row; grp_paths.add(db_row)
-        
         # === Groupe PostgreSQL ===
         grp_pg = Adw.PreferencesGroup(title="🐘 Base de données (PostgreSQL)")
         page.add(grp_pg)
@@ -1745,7 +2073,6 @@ class SettingsDialog(Adw.PreferencesDialog):
         self._rows["pg_bind_ip"] = bind_row
         grp_pg.add(bind_row)
         # ========================================
-
         # === Groupe Redis ===
         grp_redis = Adw.PreferencesGroup(title="🔴 Base de données (Redis)")
         page.add(grp_redis)
@@ -1753,14 +2080,11 @@ class SettingsDialog(Adw.PreferencesDialog):
         redis_mode_row.set_model(Gtk.StringList.new(["Local (127.0.0.1)", "Réseau (0.0.0.0)"]))
         redis_mode_row.set_selected(0 if config.get("redis_mode", "local") == "local" else 1)
         self._rows["redis_mode"] = redis_mode_row; grp_redis.add(redis_mode_row)
-        
         for key, title, placeholder in [("redis_port", "Port", "6379"), ("redis_data_dir", "Dossier de données", str(Path.home() / "redis_data")), ("redis_env_path", "Chemin du fichier .env", "/run/media/gykhamine/GY/Gykhamine/gy/.env")]:
             row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, placeholder))); self._rows[key] = row; grp_redis.add(row)
-        
         persist_row = Adw.SwitchRow(title="Utiliser la persistance (AOF)"); persist_row.set_active(config.get("redis_use_persistence", True)); self._rows["redis_use_persistence"] = persist_row; grp_redis.add(persist_row)
         env_update_row = Adw.SwitchRow(title="Mettre à jour REDIS_URL dans le .env"); env_update_row.set_active(config.get("redis_update_env", False)); env_update_row.set_subtitle("Respecte la gestion manuelle si désactivé"); self._rows["redis_update_env"] = env_update_row; grp_redis.add(env_update_row)
         # ========================================
-
         # === Groupe NFS Serveur ===
         grp_nfs_s = Adw.PreferencesGroup(title="📁 NFS Serveur")
         page.add(grp_nfs_s)
@@ -1768,18 +2092,15 @@ class SettingsDialog(Adw.PreferencesDialog):
         nfs_s_mode_row.set_model(Gtk.StringList.new(["Local (127.0.0.1)", "Réseau (ex: 192.168.1.0/24)"]))
         nfs_s_mode_row.set_selected(0 if config.get("nfs_server_mode", "local") == "local" else 1)
         self._rows["nfs_server_mode"] = nfs_s_mode_row; grp_nfs_s.add(nfs_s_mode_row)
-        
         for key, title, placeholder in [("nfs_export_dir", "Dossier à exporter", "/run/media/gykhamine/GY/gy/media"), ("nfs_lan_network", "Réseau autorisé (si mode Réseau)", "192.168.1.0/24")]:
             row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, placeholder))); self._rows[key] = row; grp_nfs_s.add(row)
         # ========================================
-
         # === Groupe NFS Client ===
         grp_nfs_c = Adw.PreferencesGroup(title="💻 NFS Client")
         page.add(grp_nfs_c)
         for key, title, placeholder in [("nfs_client_server_ip", "IP du serveur NFS", "192.168.1.10"), ("nfs_client_export_dir", "Dossier exporté sur le serveur", "/srv/nfs"), ("nfs_client_mount_point", "Point de montage local", str(Path.home() / "nfs_mount"))]:
             row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, placeholder))); self._rows[key] = row; grp_nfs_c.add(row)
         # ========================================
-        
         grp_about = Adw.PreferencesGroup(title="ℹ️ About"); page.add(grp_about)
         version_row = Adw.ActionRow(title="Version", subtitle=f"Gykhamine Studio v{VERSION}"); version_row.set_icon_name("dialog-information-symbolic"); grp_about.add(version_row)
         btn = Gtk.Button(label="💾 Save"); btn.add_css_class("suggested-action"); btn.connect("clicked", self._do_save)
