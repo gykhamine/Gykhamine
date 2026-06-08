@@ -16,7 +16,6 @@ import os, sys, re, subprocess, threading, shutil, json, webbrowser, socket, zip
 from pathlib import Path
 from datetime import datetime
 import time
-
 # ═══════════════════════════════════════════════════════════════════════
 #  GTK4 UTILITIES
 # ═══════════════════════════════════════════════════════════════════════
@@ -34,7 +33,6 @@ VERSION  = "2.9.0"
 SCRIPT_DIR = Path(__file__).parent.resolve()
 LOGO_PATH  = SCRIPT_DIR / "logo.png"
 DB_PATH    = Path.home() / ".config" / "gykhamine_studio.db"
-
 DEFAULT_CONFIG = {
     "llama_server_path": "/usr/local/bin/llama-server",
     "llama_model_path":  "/models/qwen2.5-coder.gguf",
@@ -51,7 +49,7 @@ DEFAULT_CONFIG = {
     "log_file_path":     str(Path.home() / ".local/share/gykhamine_studio/studio.log"),
     "db_path":           str(Path.home() / ".config" / "gykhamine_studio.db"),
     # === Configuration PostgreSQL ===
-    "pg_device":         "/dev/sda3",
+    "pg_device":         "", # Changed from "/dev/sda3" to empty for dynamic selection
     "pg_mount_point":    "/var/lib/pgsql/data",
     "pg_db_name":        "ma_base",
     "pg_db_user":        "mon_user",
@@ -214,32 +212,30 @@ def apply_syntax_highlighting(textview, lang):
     buf = textview.get_buffer()
     text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
     tag_table = buf.get_tag_table()
-    
     # Colors updated for better visibility (Sky Blue for functions/types in C)
     colors = {
-        "keyword": ("#c678dd", Pango.Weight.BOLD), 
+        "keyword": ("#c678dd", Pango.Weight.BOLD),
         "type": ("#e5c07b", Pango.Weight.NORMAL),
         "function": ("#61afef", Pango.Weight.NORMAL), # Sky Blue
         "variable": ("#e06c75", Pango.Weight.NORMAL),
-        "string": ("#98c379", Pango.Weight.NORMAL), 
+        "string": ("#98c379", Pango.Weight.NORMAL),
         "comment": ("#5c6370", Pango.Weight.NORMAL, True),
-        "number": ("#d19a66", Pango.Weight.NORMAL), 
+        "number": ("#d19a66", Pango.Weight.NORMAL),
         "tag": ("#e06c75", Pango.Weight.NORMAL),
-        "attr": ("#d19a66", Pango.Weight.NORMAL), 
+        "attr": ("#d19a66", Pango.Weight.NORMAL),
         "jinja": ("#c678dd", Pango.Weight.BOLD),
         "preproc": ("#56b6c2", Pango.Weight.NORMAL),
     }
-    
     for name, props in colors.items():
         tag = Gtk.TextTag(name=name)
         tag.set_property("foreground", props[0])
         if len(props) > 1 and props[1] != Pango.Weight.NORMAL: tag.set_property("weight", props[1])
         if len(props) > 2 and props[2]: tag.set_property("style", Pango.Style.ITALIC)
         if not tag_table.lookup(name): tag_table.add(tag)
-        
-    for tag_name in colors.keys(): 
+
+    for tag_name in colors.keys():
         buf.remove_tag_by_name(tag_name, buf.get_start_iter(), buf.get_end_iter())
-        
+
     patterns = []
     if lang in ("html", "jinja"):
         patterns = [(r'(<!--[\s\S]*?-->)', "comment"), (r'(\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\})', "jinja"), (r'(</?[a-zA-Z0-9:_-]+)', "tag"), (r'\b([a-zA-Z0-9:_-]+)(?=\s*=)', "attr"), (r'("[^"]*"|\'[^\']*\')', "string")]
@@ -248,12 +244,12 @@ def apply_syntax_highlighting(textview, lang):
     elif lang in ("c", "cpp", "h"):
         # Enhanced C highlighting with Sky Blue for functions
         patterns = [
-            (r'(//.*|/\*[\s\S]*?\*/)', "comment"), 
-            (r'("[^"]*"|\'[^\']*\'|`[^`]*`)', "string"), 
-            (r'^\s*#\s*\w+', "preproc"), 
-            (r'\b(auto|break|case|char|const|continue|default|do|double|else|enum|extern|float|for|goto|if|inline|int|long|register|return|short|signed|sizeof|static|struct|switch|typedef|union|unsigned|void|volatile|while|class|public|private|protected|virtual|template|namespace|bool|true|false|wchar_t)\b', "keyword"), 
-            (r'\b\d+\b', "number"), 
-            (r'\b[A-Z]\w*\b', "type"), 
+            (r'(//.*|/\*[\s\S]*?\*/)', "comment"),
+            (r'("[^"]*"|\'[^\']*\'|`[^`]*`)', "string"),
+            (r'^\s*#\s*\w+', "preproc"),
+            (r'\b(auto|break|case|char|const|continue|default|do|double|else|enum|extern|float|for|goto|if|inline|int|long|register|return|short|signed|sizeof|static|struct|switch|typedef|union|unsigned|void|volatile|while|class|public|private|protected|virtual|template|namespace|bool|true|false|wchar_t)\b', "keyword"),
+            (r'\b\d+\b', "number"),
+            (r'\b[A-Z]\w*\b', "type"),
             (r'\b[a-zA-Z_]\w*(?=\s*\()', "function"), # Functions in Sky Blue
             (r'\b[a-zA-Z_]\w*(?=\s*=)', "variable")
         ]
@@ -263,7 +259,7 @@ def apply_syntax_highlighting(textview, lang):
         patterns = [(r'(//.*|/\*[\s\S]*?\*/)', "comment"), (r'("[^"]*"|\'[^\']*\'|`[^`]*`)', "string"), (r'\b(break|case|catch|class|const|continue|debugger|default|delete|do|else|export|extends|finally|for|function|if|import|in|instanceof|new|return|super|switch|this|throw|try|typeof|var|void|while|with|yield|let|async|await|of)\b', "keyword"), (r'\b\d+\b', "number"), (r'\b[A-Z]\w*\b', "type"), (r'\b[a-zA-Z_]\w*(?=\s*\()', "function"), (r'\b[a-zA-Z_]\w*(?=\s*=)', "variable")]
     elif lang in ("bash", "sh", "pl"):
         patterns = [(r'(#.*)', "comment"), (r'("[^"]*"|\'[^\']*\')', "string"), (r'\b(if|then|else|elif|fi|case|esac|for|while|until|do|done|in|function|return|exit|break|continue|export|source|local)\b', "keyword"), (r'(\$[a-zA-Z_]\w*|\$\{[^}]+\})', "variable"), (r'\b(echo|cd|ls|pwd|grep|awk|sed|chmod|chown|sudo|apt|mkdir|rm|cp|mv|cat|find|curl|wget|python3|pip)\b', "function")]
-        
+
     for pattern, tag_name in patterns:
         for match in re.finditer(pattern, text):
             buf.apply_tag_by_name(tag_name, buf.get_iter_at_offset(match.start()), buf.get_iter_at_offset(match.end()))
@@ -304,6 +300,7 @@ def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
             re.match(r'^class\s+\w+', stripped) or
             stripped.startswith("#")
         )
+        
         if is_root_block_start:
             flush()
             current_start = i
@@ -325,8 +322,10 @@ def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
                     i += 1
             flush()
             continue
+        
         current_lines.append(line)
         i += 1
+    
     flush()
     return blocks
 
@@ -362,6 +361,7 @@ def _parse_css_blocks(code: str, file_path: str) -> list[dict]:
         raw = "".join(current_lines)
         if raw.strip(): blocks.append({"type": "style_rule", "name": label, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
         current_lines, current_start = [], i
+
     while i < len(lines):
         line = lines[i]; stripped = line.strip()
         if stripped.startswith('@') or (stripped and not stripped.startswith('/') and '{' in stripped and not stripped.startswith('}')):
@@ -379,6 +379,7 @@ def _parse_js_blocks(code: str, file_path: str) -> list[dict]:
         raw = "".join(current_lines)
         if raw.strip(): blocks.append({"type": "script_block", "name": label, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
         current_lines, current_start = [], i
+
     while i < len(lines):
         line = lines[i]; stripped = line.strip()
         if re.match(r'^(class|function|async\s+function|const|let|var|export|import)\s+', stripped) or re.match(r'^//\s*#{4,}', stripped):
@@ -395,6 +396,7 @@ def _parse_c_blocks(code: str, file_path: str) -> list[dict]:
         raw = "".join(current_lines)
         if raw.strip(): blocks.append({"type": "c_block", "name": label, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
         current_lines, current_start = [], i
+
     while i < len(lines):
         line = lines[i]; stripped = line.strip()
         if re.match(r'^(class|struct|enum|namespace)\s+\w+', stripped) or re.match(r'^(void|int|char|float|double|bool|auto|unsigned|signed|long|short)\s+\w+\s*\(', stripped) or re.match(r'^#\s*(include|define|pragma|ifdef|ifndef|endif)', stripped) or re.match(r'^//\s*#{4,}', stripped):
@@ -425,23 +427,22 @@ class NativeTtyTerminal(Gtk.Window):
         self.pid = None
         self.master_fd = None
         self.is_running = False
-        
+
         # UI Setup
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_child(box)
-        
         header = Gtk.HeaderBar()
         btn_close = Gtk.Button(label="✕ Close Terminal")
         btn_close.connect("clicked", lambda *_: self._close_terminal())
         header.pack_end(btn_close)
         box.append(header)
-        
+
         # Scrolled Area for Terminal Output
         self.scrolled = Gtk.ScrolledWindow()
         self.scrolled.set_hexpand(True)
         self.scrolled.set_vexpand(True)
         box.append(self.scrolled)
-        
+
         # Text View for Terminal Content
         self.text_view = Gtk.TextView()
         self.text_view.set_editable(False) # Input is handled via key events
@@ -449,7 +450,7 @@ class NativeTtyTerminal(Gtk.Window):
         self.text_view.set_monospace(True)
         self.text_view.set_wrap_mode(Gtk.WrapMode.NONE)
         self.text_view.add_css_class("terminal-tty-view")
-        
+
         # Custom CSS for TTY look
         provider = Gtk.CssProvider()
         provider.load_from_data(b"""
@@ -465,17 +466,17 @@ class NativeTtyTerminal(Gtk.Window):
         
         self.scrolled.set_child(self.text_view)
         self.buf = self.text_view.get_buffer()
-        
+
         # Event Controllers for Input
         self.key_controller = Gtk.EventControllerKey()
         self.key_controller.connect("key-pressed", self._on_key_pressed)
         self.text_view.add_controller(self.key_controller)
-        
+
         # Resize Controller
         self.resize_controller = Gtk.EventControllerMotion()
         self.connect("notify::default-width", self._on_resize)
         self.connect("notify::default-height", self._on_resize)
-        
+
         self.show()
         self._spawn_shell()
 
@@ -500,7 +501,6 @@ class NativeTtyTerminal(Gtk.Window):
             attrs = termios.tcgetattr(self.master_fd)
             attrs[3] = attrs[3] & ~termios.ECHO # Optional: disable echo if we handle it manually, but bash handles it
             termios.tcsetattr(self.master_fd, termios.TCSANOW, attrs)
-            
             # Start reading thread
             threading.Thread(target=self._read_loop, daemon=True).start()
 
@@ -556,7 +556,7 @@ class NativeTtyTerminal(Gtk.Window):
             elif keyval == Gdk.KEY_l: data = b"\x0c"
             elif keyval == Gdk.KEY_u: data = b"\x15"
             elif keyval == Gdk.KEY_w: data = b"\x17"
-            
+        
         if data:
             try:
                 os.write(self.master_fd, data)
@@ -625,6 +625,7 @@ class FileWatcher(threading.Thread):
             # Check for deletions
             if set(current_files.keys()) != set(self.snapshot.keys()):
                 changed = True
+            
             if changed:
                 self.snapshot = current_files
                 GLib.idle_add(self.callback)
@@ -712,12 +713,11 @@ class FilePanel(Gtk.Box):
         self.tree_store = Gtk.TreeStore(str, str, bool)
         self.show_hidden = False
         self.watcher = None
-        
+
         lbl = Gtk.Label(label="📁 Projet"); lbl.add_css_class("panel-title"); lbl.set_xalign(0); lbl.set_margin_start(12); lbl.set_margin_top(10); lbl.set_margin_bottom(6)
         self.append(lbl); self.append(Gtk.Separator())
-        
+
         self.stack = Gtk.Stack(); self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
-        
         scroll_files = Gtk.ScrolledWindow(); scroll_files.set_vexpand(True); scroll_files.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.tree_view = Gtk.TreeView(model=self.tree_store); self.tree_view.set_headers_visible(False); self.tree_view.add_css_class("file-tree-view")
         renderer = Gtk.CellRendererText()
@@ -728,14 +728,14 @@ class FilePanel(Gtk.Box):
         self.gesture_click = Gtk.GestureClick.new(); self.gesture_click.set_button(Gdk.BUTTON_SECONDARY); self.gesture_click.connect("pressed", self._on_right_click)
         self.tree_view.add_controller(self.gesture_click)
         scroll_files.set_child(self.tree_view)
-        
+
         scroll_projs = Gtk.ScrolledWindow(); scroll_projs.set_vexpand(True); scroll_projs.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.recent_list = Gtk.ListBox(); self.recent_list.add_css_class("file-list"); self.recent_list.connect("row-activated", self._on_project_selected)
         scroll_projs.set_child(self.recent_list)
-        
+
         self.stack.add_named(scroll_files, "files"); self.stack.add_named(scroll_projs, "recent")
         self.append(self.stack)
-        
+
         nav_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4); set_margins(nav_bar, 6); nav_bar.set_margin_start(8); nav_bar.set_margin_end(8)
         btn_files = Gtk.Button(label="📄"); btn_files.set_tooltip_text("Fichiers"); btn_files.add_css_class("flat"); btn_files.set_hexpand(True); btn_files.connect("clicked", lambda *_: self.stack.set_visible_child_name("files"))
         btn_recent = Gtk.Button(label="🕒"); btn_recent.set_tooltip_text("Récents"); btn_recent.add_css_class("flat"); btn_recent.set_hexpand(True); btn_recent.connect("clicked", lambda *_: self.stack.set_visible_child_name("recent"))
@@ -934,11 +934,9 @@ class TerminalPanel(Gtk.Box):
         spacer = Gtk.Box(); spacer.set_hexpand(True); header.append(spacer)
         btn_clear = Gtk.Button(label="🗑 Clear"); btn_clear.add_css_class("ctrl-btn-small"); btn_clear.connect("clicked", lambda *_: self.log_view.get_buffer().set_text(""))
         header.append(btn_clear); self.append(header); self.append(Gtk.Separator())
-        
         self.log_view = Gtk.TextView(); self.log_view.set_editable(False); self.log_view.set_monospace(True); self.log_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR); self.log_view.set_cursor_visible(False); self.log_view.add_css_class("log-view")
         log_scroll = Gtk.ScrolledWindow(); log_scroll.set_hexpand(True); log_scroll.set_vexpand(True); log_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC); log_scroll.set_child(self.log_view)
         self.append(log_scroll)
-        
         term_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6); term_box.set_margin_top(4); term_box.set_margin_bottom(4); term_box.set_margin_start(8); term_box.set_margin_end(8)
         term_box.append(Gtk.Label(label="➜", css_classes=["terminal-prompt"]))
         self.cmd_entry = Gtk.Entry(); self.cmd_entry.set_placeholder_text("Enter a command..."); self.cmd_entry.set_hexpand(True); self.cmd_entry.add_css_class("terminal-input"); self.cmd_entry.connect("activate", self._run_custom_command)
@@ -985,13 +983,13 @@ class ControlPanel(Gtk.Box):
         for label, cb in [("🔍 Check", self._check_ports), ("🔫 Kill port", self._kill_port_dialog), ("🔓 UFW Allow", self._ufw_allow_dialog)]:
             btn = Gtk.Button(label=label); btn.add_css_class("ctrl-btn-small"); btn.connect("clicked", cb); port_box.append(btn)
         self.append(port_box)
-        
+
         lbl1 = Gtk.Label(label="🚀 Django Server"); lbl1.add_css_class("control-section-title"); lbl1.set_xalign(0); self.append(lbl1)
         self._add_service_row("runserver", "▶ Dev Server", self._start_devserver, self._stop_service_factory("runserver"))
         self.dev_port_label = Gtk.Label(label="Port: auto"); self.dev_port_label.add_css_class("ctrl-btn-small"); self.dev_port_label.set_xalign(0); self.append(self.dev_port_label)
         self._add_service_row("gunicorn", "▶ Gunicorn", self._start_gunicorn, self._stop_service_factory("gunicorn"))
         self.gunicorn_port_label = Gtk.Label(label="Bind: config"); self.gunicorn_port_label.add_css_class("ctrl-btn-small"); self.gunicorn_port_label.set_xalign(0); self.append(self.gunicorn_port_label)
-        
+
         sep = Gtk.Separator(); sep.set_margin_top(8); sep.set_margin_bottom(4); self.append(sep)
         lbl2 = Gtk.Label(label="🗄 Django Commands (manage.py)"); lbl2.add_css_class("control-section-title"); lbl2.set_xalign(0); self.append(lbl2)
         grid = Gtk.Grid(); grid.set_column_spacing(6); grid.set_row_spacing(6)
@@ -1002,14 +1000,14 @@ class ControlPanel(Gtk.Box):
             else: btn.connect("clicked", lambda _, c=cmd: self._run_manage_command(c))
             grid.attach(btn, idx % 3, idx // 3, 1, 1)
         self.append(grid)
-        
+
         sep_db = Gtk.Separator(); sep_db.set_margin_top(8); sep_db.set_margin_bottom(4); self.append(sep_db)
         lbl_db = Gtk.Label(label="🗄 Base de données"); lbl_db.add_css_class("control-section-title"); lbl_db.set_xalign(0); self.append(lbl_db)
         btn_db_stats = Gtk.Button(label="📊 Visualiser les Tables et Données")
         btn_db_stats.add_css_class("ctrl-btn"); btn_db_stats.set_hexpand(True); btn_db_stats.set_tooltip_text("Afficher un tableau avec les colonnes, clés et les données réelles (max 100 lignes)")
         btn_db_stats.connect("clicked", self._show_db_stats)
         self.append(btn_db_stats)
-        
+
         # === GESTION POSTGRESQL ===
         sep_pg = Gtk.Separator(); sep_pg.set_margin_top(8); sep_pg.set_margin_bottom(4); self.append(sep_pg)
         lbl_pg = Gtk.Label(label="🐘 Gestion PostgreSQL"); lbl_pg.add_css_class("control-section-title"); lbl_pg.set_xalign(0); self.append(lbl_pg)
@@ -1018,22 +1016,22 @@ class ControlPanel(Gtk.Box):
         btn_create = Gtk.Button(label="➕ Créer DB"); btn_create.add_css_class("ctrl-btn"); btn_create.set_hexpand(True); btn_create.connect("clicked", self._run_pg_creatdb); pg_config_box.append(btn_create)
         self.append(pg_config_box)
         self._add_custom_service_row("postgresql", "▶ Démarrer & Configurer", self._run_pg_rundb, self._run_pg_stopdb)
-        
+
         # === GESTION REDIS ===
         sep_redis = Gtk.Separator(); sep_redis.set_margin_top(8); sep_redis.set_margin_bottom(4); self.append(sep_redis)
         lbl_redis = Gtk.Label(label="🔴 Gestion Redis"); lbl_redis.add_css_class("control-section-title"); lbl_redis.set_xalign(0); self.append(lbl_redis)
         self._add_custom_service_row("redis", "▶ Démarrer Redis", self._run_redis_start, self._run_redis_stop)
-        
+
         # === GESTION NFS SERVEUR ===
         sep_nfs_s = Gtk.Separator(); sep_nfs_s.set_margin_top(8); sep_nfs_s.set_margin_bottom(4); self.append(sep_nfs_s)
         lbl_nfs_s = Gtk.Label(label="📁 NFS Serveur"); lbl_nfs_s.add_css_class("control-section-title"); lbl_nfs_s.set_xalign(0); self.append(lbl_nfs_s)
         self._add_custom_service_row("nfs_server", "▶ Démarrer Serveur", self._run_nfs_server_start, self._run_nfs_server_stop)
-        
+
         # === GESTION NFS CLIENT ===
         sep_nfs_c = Gtk.Separator(); sep_nfs_c.set_margin_top(8); sep_nfs_c.set_margin_bottom(4); self.append(sep_nfs_c)
         lbl_nfs_c = Gtk.Label(label="💻 NFS Client"); lbl_nfs_c.add_css_class("control-section-title"); lbl_nfs_c.set_xalign(0); self.append(lbl_nfs_c)
         self._add_custom_service_row("nfs_client", "📥 Monter le partage", self._run_nfs_client_mount, self._run_nfs_client_umount)
-        
+
         # ============================================
         # === GESTION NGINX ===
         sep_nginx = Gtk.Separator(); sep_nginx.set_margin_top(8); sep_nginx.set_margin_bottom(4); self.append(sep_nginx)
@@ -1044,7 +1042,7 @@ class ControlPanel(Gtk.Box):
         nginx_ctrl_box.append(btn_nginx_config); nginx_ctrl_box.append(btn_nginx_restart)
         self.append(nginx_ctrl_box)
         self._add_custom_service_row("nginx", "▶ Démarrer Nginx", self._run_nginx_start, self._run_nginx_stop)
-        
+
         # ============================================
         # === GESTION SSH AVANCÉE ===
         sep_ssh = Gtk.Separator(); sep_ssh.set_margin_top(8); sep_ssh.set_margin_bottom(4); self.append(sep_ssh)
@@ -1055,7 +1053,7 @@ class ControlPanel(Gtk.Box):
         ssh_ctrl_box.append(btn_ssh_config); ssh_ctrl_box.append(btn_ssh_server)
         self.append(ssh_ctrl_box)
         self._add_custom_service_row("ssh_client", "🔗 Connect Client (TTY)", self._run_ssh_client_connect, self._run_ssh_client_disconnect_dummy)
-        
+
         # ============================================
         # === GESTION VENV ===
         sep_venv = Gtk.Separator(); sep_venv.set_margin_top(8); sep_venv.set_margin_bottom(4); self.append(sep_venv)
@@ -1067,7 +1065,7 @@ class ControlPanel(Gtk.Box):
         venv_ctrl_box.append(btn_venv_create); venv_ctrl_box.append(btn_venv_install); venv_ctrl_box.append(btn_venv_del)
         self.append(venv_ctrl_box)
         self._add_custom_service_row("venv_activate", "⚡ Activate Shell (TTY)", self._run_venv_activate, self._run_venv_deactivate_dummy)
-        
+
         # ============================================
         sep2 = Gtk.Separator(); sep2.set_margin_top(8); sep2.set_margin_bottom(4); self.append(sep2)
         lbl3 = Gtk.Label(label="💊 Gykhamine Capsule"); lbl3.add_css_class("control-section-title"); lbl3.set_xalign(0); self.append(lbl3)
@@ -1075,19 +1073,19 @@ class ControlPanel(Gtk.Box):
         for label, path, sudo in [("🔑 /1/gy.py", "Gykhamine/1/gy.py", True), ("👤 /2/gy.py", "Gykhamine/2/gy.py", False)]:
             btn = Gtk.Button(label=f"Run {label}"); btn.add_css_class("ctrl-btn-warn" if sudo else "ctrl-btn"); btn.connect("clicked", lambda *_: self._run_gy(path, sudo)); row_cap.append(btn)
         self.append(row_cap)
-        
+
         sep3 = Gtk.Separator(); sep3.set_margin_top(8); sep3.set_margin_bottom(4); self.append(sep3)
         lbl4 = Gtk.Label(label="🤖 AI (llama.cpp)"); lbl4.add_css_class("control-section-title"); lbl4.set_xalign(0); self.append(lbl4)
         self._add_service_row("llama", "▶ Run llama-server", self._start_llama, self._stop_service_factory("llama"))
         btn_browser = Gtk.Button(label="🌐 Open browser"); btn_browser.add_css_class("ctrl-btn"); btn_browser.connect("clicked", self._open_browser); self.append(btn_browser)
-        
+
         sep_arch = Gtk.Separator(); sep_arch.set_margin_top(8); sep_arch.set_margin_bottom(4); self.append(sep_arch)
         lbl_arch = Gtk.Label(label="📦 ZIP Archiving"); lbl_arch.add_css_class("control-section-title"); lbl_arch.set_xalign(0); self.append(lbl_arch)
         row_arch = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         btn_compress = Gtk.Button(label="🗜 Compress to .zip"); btn_compress.add_css_class("ctrl-btn"); btn_compress.connect("clicked", self._compress_project)
         btn_decompress = Gtk.Button(label="📂 Decompress .zip"); btn_decompress.add_css_class("ctrl-btn"); btn_decompress.connect("clicked", self._decompress_archive)
         row_arch.append(btn_compress); row_arch.append(btn_decompress); self.append(row_arch)
-        
+
         sep4 = Gtk.Separator(); sep4.set_margin_top(8); sep4.set_margin_bottom(4); self.append(sep4)
         btn_stop_all = Gtk.Button(label="⏹ Stop all"); btn_stop_all.add_css_class("ctrl-btn-stop"); btn_stop_all.connect("clicked", self._stop_all_services); self.append(btn_stop_all)
 
@@ -1279,51 +1277,1161 @@ class ControlPanel(Gtk.Box):
             dialog.destroy()
         btn_open.connect("clicked", on_open); btn_cancel.connect("clicked", lambda *_: dialog.destroy()); dialog.present()
 
-    # ... (Rest of ControlPanel methods for PostgreSQL, Redis, NFS, Nginx, SSH, Venv remain unchanged) ...
-    # For brevity, I'm including the key new methods and the rest of the class structure below.
-    # You should keep the existing methods for PG, Redis, NFS, Nginx, SSH, Venv as they were in the original file.
-    # I will include placeholders for them to ensure the code is complete and valid.
-    
-    def _run_pg_initdb(self, *_): pass # Placeholder for existing method
-    def _run_pg_creatdb(self, *_): pass # Placeholder for existing method
-    def _run_pg_rundb(self, *_): pass # Placeholder for existing method
-    def _run_pg_stopdb(self, *_): pass # Placeholder for existing method
-    def _run_redis_start(self, *_): pass # Placeholder for existing method
-    def _run_redis_stop(self, *_): pass # Placeholder for existing method
-    def _run_nfs_server_start(self, *_): pass # Placeholder for existing method
-    def _run_nfs_server_stop(self, *_): pass # Placeholder for existing method
-    def _run_nfs_client_mount(self, *_): pass # Placeholder for existing method
-    def _run_nfs_client_umount(self, *_): pass # Placeholder for existing method
-    def _show_nginx_config_dialog(self, *_): pass # Placeholder for existing method
-    def _update_nginx_conf(self, *_): pass # Placeholder for existing method
-    def _run_nginx_start(self, *_): pass # Placeholder for existing method
-    def _run_nginx_stop(self, *_): pass # Placeholder for existing method
-    def _run_nginx_restart(self, *_): pass # Placeholder for existing method
-    def _show_ssh_config_dialog(self, *_): pass # Placeholder for existing method
-    def _run_ssh_server_start(self, *_): pass # Placeholder for existing method
-    def _run_ssh_client_connect(self, *_): pass # Placeholder for existing method
-    def _run_ssh_client_disconnect_dummy(self, *_): pass # Placeholder for existing method
-    def _run_venv_create(self, *_): pass # Placeholder for existing method
-    def _show_venv_install_dialog(self, *_): pass # Placeholder for existing method
-    def _run_venv_delete(self, *_): pass # Placeholder for existing method
-    def _run_venv_activate(self, *_): pass # Placeholder for existing method
-    def _run_venv_deactivate_dummy(self, *_): pass # Placeholder for existing method
-    def _show_db_stats(self, *_): pass # Placeholder for existing method
-    def _display_db_stats_popup(self, stats: list): pass # Placeholder for existing method
-    def _on_table_selected(self, listbox, row): pass # Placeholder for existing method
-    def _export_to_csv(self): pass # Placeholder for existing method
-    def _on_csv_save_selected(self, dialog, result): pass # Placeholder for existing method
-    def _export_to_excel(self): pass # Placeholder for existing method
-    def _on_excel_save_selected(self, dialog, result): pass # Placeholder for existing method
-    def _run_gy(self, rel_path: str, sudo=False): pass # Placeholder for existing method
-    def _start_llama(self, *_): pass # Placeholder for existing method
-    def _open_browser(self, *_): pass # Placeholder for existing method
-    def _open_browser_url(self, url): pass # Placeholder for existing method
-    def _compress_project(self, *_): pass # Placeholder for existing method
-    def _on_folder_selected(self, dialog, result, entry): pass # Placeholder for existing method
-    def _decompress_archive(self, *_): pass # Placeholder for existing method
-    def _on_decompress_selected(self, dialog, result): pass # Placeholder for existing method
+    # ═══════════════════════════════════════════════════════════
+    #  GESTION POSTGRESQL INTÉGRÉE
+    # ═══════════════════════════════════════════════════════════
+    def _run_pg_initdb(self, *_):
+        cfg = self.get_config()
+        device = cfg.get("pg_device", "")
+        mount_point = cfg.get("pg_mount_point", "/var/lib/pgsql/data")
+        
+        if not device:
+            self.show_toast("❌ Veuillez sélectionner une partition dans les paramètres")
+            return
 
+        self.terminal._log("🔧 === Initialisation PostgreSQL ===")
+        self.terminal._log(f"📁 Point de montage: {mount_point}")
+        def _thread():
+            try:
+                GLib.idle_add(self.terminal._log, f"▶ mkdir -p {mount_point}")
+                subprocess.run(["mkdir", "-p", mount_point], check=True)
+                mount_check = subprocess.run(["mountpoint", "-q", mount_point], capture_output=True)
+                if mount_check.returncode != 0:
+                    GLib.idle_add(self.terminal._log, f"▶ Montage de {device} sur {mount_point}")
+                    subprocess.run(["sudo", "mount", device, mount_point], check=True)
+                else: GLib.idle_add(self.terminal._log, "✅ Déjà monté")
+                
+                pg_version_path = Path(mount_point) / "PG_VERSION"
+                if not pg_version_path.exists():
+                    GLib.idle_add(self.terminal._log, "▶ Initialisation de la base (initdb)...")
+                    subprocess.run(["sudo", "chown", "-R", "postgres:postgres", mount_point], check=True)
+                    subprocess.run(["sudo", "chmod", "700", mount_point], check=True)
+                    subprocess.run(["sudo", "-u", "postgres", "initdb", "-D", mount_point], check=True)
+                else: GLib.idle_add(self.terminal._log, "✅ Base de données déjà initialisée")
+                
+                GLib.idle_add(self.terminal._log, "▶ Démarrage de PostgreSQL...")
+                status = subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", mount_point, "status"], capture_output=True)
+                if status.returncode != 0:
+                    subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", mount_point, "start"], check=True)
+                    GLib.idle_add(self.terminal._log, "✅ PostgreSQL démarré")
+                else: GLib.idle_add(self.terminal._log, "✅ PostgreSQL déjà en cours d'exécution")
+                
+                GLib.idle_add(self.show_toast, "✅ Initialisation PostgreSQL réussie")
+                GLib.idle_add(self.terminal._log, "=== OK ===")
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self.terminal._log, f"❌ Erreur lors de l'exécution: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec de l'initialisation")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_pg_creatdb(self, *_):
+        cfg = self.get_config()
+        db_name = cfg.get("pg_db_name", "ma_base")
+        db_user = cfg.get("pg_db_user", "mon_user")
+        db_password = cfg.get("pg_db_password", "mot_de_passe").replace("'", "''")
+        self.terminal._log("➕ === Création Base & Utilisateur ===")
+        def _thread():
+            try:
+                check_user = subprocess.run(["sudo", "-u", "postgres", "psql", "-tAc", f"SELECT 1 FROM pg_roles WHERE rolname='{db_user}'"], capture_output=True, text=True).stdout.strip()
+                if check_user != "1":
+                    GLib.idle_add(self.terminal._log, f"▶ Création de l'utilisateur {db_user}")
+                    subprocess.run(["sudo", "-u", "postgres", "psql", "-c", f"CREATE USER {db_user} WITH PASSWORD '{db_password}';"], check=True)
+                else: GLib.idle_add(self.terminal._log, "✅ Utilisateur déjà existant")
+                
+                check_db = subprocess.run(["sudo", "-u", "postgres", "psql", "-tAc", f"SELECT 1 FROM pg_database WHERE datname='{db_name}'"], capture_output=True, text=True).stdout.strip()
+                if check_db != "1":
+                    GLib.idle_add(self.terminal._log, f"▶ Création de la base {db_name}")
+                    subprocess.run(["sudo", "-u", "postgres", "createdb", "-O", db_user, db_name], check=True)
+                else: GLib.idle_add(self.terminal._log, "✅ Base déjà existante")
+                
+                GLib.idle_add(self.terminal._log, "▶ Attribution des privilèges...")
+                subprocess.run(["sudo", "-u", "postgres", "psql", "-c", f"GRANT ALL PRIVILEGES ON DATABASE {db_name} TO {db_user};"], check=True)
+                subprocess.run(["sudo", "-u", "postgres", "psql", "-d", db_name, "-c", f"GRANT USAGE, CREATE ON SCHEMA public TO {db_user};"], check=True)
+                subprocess.run(["sudo", "-u", "postgres", "psql", "-d", db_name, "-c", f"ALTER SCHEMA public OWNER TO {db_user};"], check=True)
+                
+                GLib.idle_add(self.show_toast, "✅ Base et utilisateur configurés")
+                GLib.idle_add(self.terminal._log, "=== OK ===")
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self.terminal._log, f"❌ Erreur SQL: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec de la création")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_pg_rundb(self, *_):
+        cfg = self.get_config()
+        device = cfg.get("pg_device", "")
+        pgdata = cfg.get("pg_mount_point", "/var/lib/pgsql/data")
+        bind_ip = cfg.get("pg_bind_ip", "127.0.0.1")
+        listen_addr = "*" if bind_ip == "0.0.0.0" else bind_ip
+        
+        if not device:
+            self.show_toast("❌ Veuillez sélectionner une partition dans les paramètres")
+            return
+
+        self.terminal._log("🚀 === Démarrage et Configuration IP ===")
+        def _thread():
+            try:
+                subprocess.run(["mkdir", "-p", pgdata], check=True)
+                mount_check = subprocess.run(["mountpoint", "-q", pgdata], capture_output=True)
+                if mount_check.returncode != 0:
+                    GLib.idle_add(self.terminal._log, f"▶ Montage de {device} sur {pgdata}")
+                    subprocess.run(["sudo", "mount", device, pgdata], check=True)
+                else:
+                    GLib.idle_add(self.terminal._log, "✅ Déjà monté")
+                
+                status = subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", pgdata, "status"], capture_output=True)
+                is_running = (status.returncode == 0)
+                if not is_running:
+                    GLib.idle_add(self.terminal._log, "▶ Démarrage de PostgreSQL...")
+                    subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", pgdata, "start"], check=True)
+                else:
+                    GLib.idle_add(self.terminal._log, "✅ PostgreSQL déjà en cours d'exécution")
+                
+                GLib.idle_add(self.terminal._log, f"▶ Configuration de listen_addresses sur '{listen_addr}'...")
+                subprocess.run(["sudo", "-u", "postgres", "psql", "-c", f"ALTER SYSTEM SET listen_addresses = '{listen_addr}';"], check=True)
+                
+                if bind_ip == "0.0.0.0":
+                    pg_hba_path = Path(pgdata) / "pg_hba.conf"
+                    GLib.idle_add(self.terminal._log, "🌐 Mode Réseau détecté. Automatisation de pg_hba.conf...")
+                    hba_content = pg_hba_path.read_text(encoding="utf-8")
+                    if "0.0.0.0/0" not in hba_content:
+                        GLib.idle_add(self.terminal._log, "▶ Ajout de la règle d'accès distant dans pg_hba.conf...")
+                        rule = "\n# --- Ajouté automatiquement par Gykhamine Studio ---\nhost    all             all             0.0.0.0/0               scram-sha-256\n"
+                        subprocess.run(["sudo", "tee", "-a", str(pg_hba_path)], input=rule, text=True, check=True)
+                        GLib.idle_add(self.terminal._log, "✅ Règle pg_hba.conf ajoutée avec succès.")
+                    else:
+                        GLib.idle_add(self.terminal._log, "✅ La règle d'accès distant est déjà présente dans pg_hba.conf.")
+                
+                GLib.idle_add(self.terminal._log, "▶ Redémarrage propre pour appliquer la configuration...")
+                subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", pgdata, "restart", "-m", "fast"], check=True)
+                
+                GLib.idle_add(self.show_toast, "✅ PostgreSQL démarré et IP configurée")
+                GLib.idle_add(self.terminal._log, "=== READY ===")
+                GLib.idle_add(self._set_dot, "postgresql", True)
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self.terminal._log, f"❌ Erreur: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec du démarrage/config")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_pg_stopdb(self, *_):
+        cfg = self.get_config()
+        pgdata = cfg.get("pg_mount_point", "/var/lib/pgsql/data")
+        self.terminal._log("🛑 === Arrêt de PostgreSQL ===")
+        def _thread():
+            try:
+                GLib.idle_add(self.terminal._log, "▶ Arrêt propre de PostgreSQL (mode fast)...")
+                subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", pgdata, "stop", "-m", "fast"], check=True)
+                GLib.idle_add(self.show_toast, "✅ PostgreSQL arrêté avec succès")
+                GLib.idle_add(self.terminal._log, "=== STOPPED ===")
+                GLib.idle_add(self._set_dot, "postgresql", False)
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self.terminal._log, f"❌ Erreur lors de l'arrêt: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec de l'arrêt")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    # ═══════════════════════════════════════════════════════════
+    #  GESTION REDIS INTÉGRÉE
+    # ═══════════════════════════════════════════════════════════
+    def _run_redis_start(self, *_):
+        cfg = self.get_config()
+        redis_ip = cfg.get("redis_ip", "127.0.0.1")
+        redis_port = cfg.get("redis_port", "6379")
+        data_dir = cfg.get("redis_data_dir", str(Path.home() / "redis_data"))
+        use_persistence = cfg.get("redis_use_persistence", True)
+        env_path = cfg.get("redis_env_path", "")
+        update_env = cfg.get("redis_update_env", False)
+        self.terminal._log("🔴 === Démarrage de Redis ===")
+        def _thread():
+            try:
+                if update_env and env_path and Path(env_path).exists():
+                    GLib.idle_add(self.terminal._log, "▶ Mise à jour de REDIS_URL dans le .env...")
+                    with open(env_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    redis_url = f"redis://{redis_ip}:{redis_port}/1"
+                    if "REDIS_URL=" in content:
+                        content = re.sub(r'^REDIS_URL=.*$', f'REDIS_URL={redis_url}', content, flags=re.MULTILINE)
+                    else:
+                        content += f"\nREDIS_URL={redis_url}\n"
+                    with open(env_path, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    GLib.idle_add(self.terminal._log, f"✅ REDIS_URL synchronisé : {redis_url}")
+                elif update_env:
+                    GLib.idle_add(self.terminal._log, f"⚠ Fichier .env introuvable à : {env_path}")
+                
+                if use_persistence:
+                    os.makedirs(data_dir, exist_ok=True)
+                    cmd = f"redis-server --bind {redis_ip} --port {redis_port} --dir {data_dir} --appendonly yes --daemonize yes"
+                else:
+                    cmd = f"redis-server --bind {redis_ip} --port {redis_port} --daemonize yes"
+                
+                GLib.idle_add(self.terminal._log, f"▶ Exécution : {cmd}")
+                status = os.system(cmd)
+                if status == 0:
+                    GLib.idle_add(self._set_dot, "redis", True)
+                    GLib.idle_add(self.show_toast, "✅ Redis démarré")
+                    GLib.idle_add(self.terminal._log, f"=== READY : {redis_ip}:{redis_port} ===")
+                else:
+                    GLib.idle_add(self._set_dot, "redis", False)
+                    GLib.idle_add(self.show_toast, "❌ Échec du démarrage Redis")
+                    GLib.idle_add(self.terminal._log, "❌ Impossible de démarrer le serveur Redis.")
+            except Exception as e:
+                GLib.idle_add(self._set_dot, "redis", False)
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_redis_stop(self, *_):
+        cfg = self.get_config()
+        redis_ip = cfg.get("redis_ip", "127.0.0.1")
+        redis_port = cfg.get("redis_port", "6379")
+        self.terminal._log("🛑 === Arrêt de Redis ===")
+        def _thread():
+            try:
+                GLib.idle_add(self.terminal._log, f"▶ Arrêt de Redis sur {redis_ip}:{redis_port}...")
+                subprocess.run(["redis-cli", "-h", redis_ip, "-p", redis_port, "shutdown", "nosave"], capture_output=True)
+                subprocess.run(["pkill", "-f", "redis-server"], capture_output=True)
+                GLib.idle_add(self._set_dot, "redis", False)
+                GLib.idle_add(self.show_toast, "✅ Redis arrêté")
+                GLib.idle_add(self.terminal._log, "=== STOPPED ===")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    # ═══════════════════════════════════════════════════════════
+    #  GESTION NFS INTÉGRÉE
+    # ═══════════════════════════════════════════════════════════
+    def _run_nfs_server_start(self, *_):
+        cfg = self.get_config()
+        export_dir = cfg.get("nfs_export_dir", "/run/media/gykhamine/GY/gy/media")
+        mode = cfg.get("nfs_server_mode", "local")
+        lan_network = cfg.get("nfs_lan_network", "192.168.1.0/24") if mode == "network" else "127.0.0.1"
+        self.terminal._log("📁 === Démarrage du Serveur NFS ===")
+        def _thread():
+            try:
+                GLib.idle_add(self.terminal._log, f"▶ Création du dossier d'export : {export_dir}")
+                subprocess.run(["mkdir", "-p", export_dir], check=True)
+                subprocess.run(["chmod", "777", export_dir], check=True)
+                
+                GLib.idle_add(self.terminal._log, "▶ Mise à jour de /etc/exports...")
+                exports_path = "/etc/exports"
+                try:
+                    with open(exports_path, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                except FileNotFoundError:
+                    lines = []
+                lines = [l for l in lines if not l.strip().startswith("# --- Gykhamine NFS ---") and not l.strip().startswith(export_dir)]
+                new_entry = f"# --- Gykhamine NFS ---\n{export_dir} {lan_network}(rw,sync,no_subtree_check,no_root_squash)\n"
+                lines.append(new_entry)
+                content = "".join(lines)
+                subprocess.run(["sudo", "tee", exports_path], input=content, text=True, check=True)
+                
+                GLib.idle_add(self.terminal._log, "▶ Application de la configuration (exportfs -ra)...")
+                subprocess.run(["sudo", "exportfs", "-ra"], check=True)
+                GLib.idle_add(self.terminal._log, "▶ Redémarrage du service nfs-server...")
+                subprocess.run(["sudo", "systemctl", "restart", "nfs-server.service"], check=True)
+                
+                GLib.idle_add(self._set_dot, "nfs_server", True)
+                GLib.idle_add(self.show_toast, "✅ Serveur NFS démarré")
+                GLib.idle_add(self.terminal._log, f"=== READY : Export {export_dir} vers {lan_network} ===")
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self._set_dot, "nfs_server", False)
+                GLib.idle_add(self.terminal._log, f"❌ Erreur: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec du démarrage NFS")
+            except Exception as e:
+                GLib.idle_add(self._set_dot, "nfs_server", False)
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_nfs_server_stop(self, *_):
+        cfg = self.get_config()
+        export_dir = cfg.get("nfs_export_dir", "/run/media/gykhamine/GY/gy/media")
+        self.terminal._log("🛑 === Arrêt du Serveur NFS ===")
+        def _thread():
+            try:
+                exports_path = "/etc/exports"
+                try:
+                    with open(exports_path, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                    lines = [l for l in lines if not l.strip().startswith("# --- Gykhamine NFS ---") and not l.strip().startswith(export_dir)]
+                    content = "".join(lines)
+                    subprocess.run(["sudo", "tee", exports_path], input=content, text=True, check=True)
+                except Exception: pass
+                subprocess.run(["sudo", "exportfs", "-ra"], check=True)
+                subprocess.run(["sudo", "systemctl", "stop", "nfs-server.service"], check=True)
+                GLib.idle_add(self._set_dot, "nfs_server", False)
+                GLib.idle_add(self.show_toast, "✅ Serveur NFS arrêté")
+                GLib.idle_add(self.terminal._log, "=== STOPPED ===")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_nfs_client_mount(self, *_):
+        cfg = self.get_config()
+        server_ip = cfg.get("nfs_client_server_ip", "192.168.1.10")
+        export_dir = cfg.get("nfs_client_export_dir", "/srv/nfs")
+        mount_point = cfg.get("nfs_client_mount_point", str(Path.home() / "nfs_mount"))
+        self.terminal._log("💻 === Montage Client NFS ===")
+        def _thread():
+            try:
+                subprocess.run(["mkdir", "-p", mount_point], check=True)
+                GLib.idle_add(self.terminal._log, f"▶ Test de reachabilité du serveur {server_ip}...")
+                ping = subprocess.run(["ping", "-c", "1", "-W", "2", server_ip], capture_output=True)
+                if ping.returncode != 0:
+                    GLib.idle_add(self.terminal._log, "❌ Serveur inaccessible, fallback local ou vérifiez l'IP.")
+                    GLib.idle_add(self.show_toast, "❌ Serveur NFS injoignable")
+                    return
+                
+                GLib.idle_add(self.terminal._log, f"▶ Montage de {server_ip}:{export_dir} sur {mount_point}...")
+                subprocess.run(["sudo", "mount", "-t", "nfs", f"{server_ip}:{export_dir}", mount_point], check=True)
+                GLib.idle_add(self._set_dot, "nfs_client", True)
+                GLib.idle_add(self.show_toast, "✅ Partage NFS monté")
+                GLib.idle_add(self.terminal._log, f"=== MOUNTED : {mount_point} ===")
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self._set_dot, "nfs_client", False)
+                GLib.idle_add(self.terminal._log, f"❌ Erreur de montage: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec du montage NFS")
+            except Exception as e:
+                GLib.idle_add(self._set_dot, "nfs_client", False)
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_nfs_client_umount(self, *_):
+        cfg = self.get_config()
+        mount_point = cfg.get("nfs_client_mount_point", str(Path.home() / "nfs_mount"))
+        self.terminal._log("📤 === Démontage Client NFS ===")
+        def _thread():
+            try:
+                subprocess.run(["sudo", "umount", "-l", mount_point], check=True)
+                GLib.idle_add(self._set_dot, "nfs_client", False)
+                GLib.idle_add(self.show_toast, "✅ Partage NFS démonté")
+                GLib.idle_add(self.terminal._log, "=== UNMOUNTED ===")
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self.terminal._log, f"❌ Erreur de démontage: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec du démontage")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    # ═══════════════════════════════════════════════════════════
+    #  GESTION NGINX INTÉGRÉE
+    # ═══════════════════════════════════════════════════════════
+    def _show_nginx_config_dialog(self, *_):
+        cfg = self.get_config()
+        dialog = Gtk.Dialog(title="⚙ Configuration Avancée Nginx", transient_for=self.get_root())
+        dialog.set_default_size(600, 700)
+        content = dialog.get_content_area()
+        content.set_spacing(10)
+        set_margins(content, 16)
+        
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_vexpand(True)
+        
+        grid = Gtk.Grid()
+        grid.set_row_spacing(8)
+        grid.set_column_spacing(8)
+        row = 0
+        
+        # --- Section 1: Général ---
+        lbl_sec1 = Gtk.Label(label="🌐 Configuration Générale", css_classes=["control-section-title"], xalign=0, margin_bottom=4)
+        grid.attach(lbl_sec1, 0, row, 2, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Mode :", xalign=0), 0, row, 1, 1)
+        combo_mode = Gtk.ComboBoxText()
+        combo_mode.append_text("Reverse Proxy (Simple)")
+        combo_mode.append_text("Load Balancer (Répartition de charge)")
+        combo_mode.set_active(0 if cfg.get("nginx_mode") == "reverse_proxy" else 1)
+        grid.attach(combo_mode, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Nom de domaine (server_name) :", xalign=0), 0, row, 1, 1)
+        entry_name = Gtk.Entry(); entry_name.set_text(cfg.get("nginx_server_name", "localhost")); grid.attach(entry_name, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Port d'écoute HTTPS :", xalign=0), 0, row, 1, 1)
+        entry_port = Gtk.Entry(); entry_port.set_text(cfg.get("nginx_listen_port", "443")); grid.attach(entry_port, 1, row, 1, 1); row += 1
+        
+        row_force = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row_force.append(Gtk.Label(label="Forcer HTTPS (Redirect 80 -> 443) :", xalign=0))
+        sw_force = Gtk.Switch(); sw_force.set_active(cfg.get("nginx_force_https", True)); row_force.append(sw_force)
+        grid.attach(row_force, 0, row, 2, 1); row += 1
+        
+        # --- Section 2: Backend & Redirections ---
+        lbl_sec2 = Gtk.Label(label="🔀 Backend & Redirections", css_classes=["control-section-title"], xalign=0, margin_top=8, margin_bottom=4)
+        grid.attach(lbl_sec2, 0, row, 2, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Serveurs Backend (séparés par virgule) :", xalign=0), 0, row, 1, 1)
+        entry_upstream = Gtk.Entry(); entry_upstream.set_text(cfg.get("nginx_upstream_servers", "127.0.0.1:8000, 127.0.0.1:8001"))
+        entry_upstream.set_tooltip_text("Ex: 127.0.0.1:8000, 127.0.0.1:8001")
+        grid.attach(entry_upstream, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="URL de redirection (proxy_pass) :", xalign=0), 0, row, 1, 1)
+        entry_proxy = Gtk.Entry(); entry_proxy.set_text(cfg.get("nginx_proxy_pass", "http://gunicorn")); grid.attach(entry_proxy, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Redirections personnalisées (une par ligne : /ancien -> /nouveau) :", xalign=0), 0, row, 2, 1); row += 1
+        txt_redirects = Gtk.TextView(); txt_redirects.set_wrap_mode(Gtk.WrapMode.WORD)
+        txt_redirects.get_buffer().set_text(cfg.get("nginx_custom_redirects", ""))
+        scroll_redirects = Gtk.ScrolledWindow(); scroll_redirects.set_size_request(-1, 60); scroll_redirects.set_child(txt_redirects)
+        grid.attach(scroll_redirects, 0, row, 2, 1); row += 1
+        
+        # --- Section 3: Fichiers Statiques & Médias ---
+        lbl_sec3 = Gtk.Label(label="📁 Liaison Django (Static & Media)", css_classes=["control-section-title"], xalign=0, margin_top=8, margin_bottom=4)
+        grid.attach(lbl_sec3, 0, row, 2, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="URL Static :", xalign=0), 0, row, 1, 1)
+        entry_s_url = Gtk.Entry(); entry_s_url.set_text(cfg.get("nginx_static_url", "/static/")); grid.attach(entry_s_url, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Chemin local Static :", xalign=0), 0, row, 1, 1)
+        entry_s_path = Gtk.Entry(); entry_s_path.set_text(cfg.get("nginx_static_path", "/chemin/vers/ton/projet/static/")); grid.attach(entry_s_path, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="URL Media :", xalign=0), 0, row, 1, 1)
+        entry_m_url = Gtk.Entry(); entry_m_url.set_text(cfg.get("nginx_media_url", "/media/")); grid.attach(entry_m_url, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Chemin local Media :", xalign=0), 0, row, 1, 1)
+        entry_m_path = Gtk.Entry(); entry_m_path.set_text(cfg.get("nginx_media_path", "/chemin/vers/ton/projet/media/")); grid.attach(entry_m_path, 1, row, 1, 1); row += 1
+        
+        # --- Section 4: SSL & Sécurité ---
+        lbl_sec4 = Gtk.Label(label="🔒 SSL & Sécurité", css_classes=["control-section-title"], xalign=0, margin_top=8, margin_bottom=4)
+        grid.attach(lbl_sec4, 0, row, 2, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Certificat SSL (.crt) :", xalign=0), 0, row, 1, 1)
+        entry_cert = Gtk.Entry(); entry_cert.set_text(cfg.get("nginx_ssl_cert", "/etc/pki/nginx/server.crt")); entry_cert.set_editable(False); entry_cert.add_css_class("dim-label"); grid.attach(entry_cert, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Clé Privée SSL (.key) :", xalign=0), 0, row, 1, 1)
+        entry_key = Gtk.Entry(); entry_key.set_text(cfg.get("nginx_ssl_key", "/etc/pki/nginx/private/server.key")); entry_key.set_editable(False); entry_key.add_css_class("dim-label"); grid.attach(entry_key, 1, row, 1, 1); row += 1
+        
+        row_sec = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        sw_headers = Gtk.Switch(); sw_headers.set_active(cfg.get("nginx_security_headers", True))
+        row_sec.append(Gtk.Label(label="En-têtes de sécurité (HSTS, X-Frame, etc.) :")); row_sec.append(sw_headers)
+        sw_buffer = Gtk.Switch(); sw_buffer.set_active(cfg.get("nginx_proxy_buffering", True))
+        row_sec.append(Gtk.Label(label="Proxy Buffering :")); row_sec.append(sw_buffer)
+        grid.attach(row_sec, 0, row, 2, 1); row += 1
+        
+        # --- Section 5: Performances ---
+        lbl_sec5 = Gtk.Label(label="⚡ Performances & Timeouts", css_classes=["control-section-title"], xalign=0, margin_top=8, margin_bottom=4)
+        grid.attach(lbl_sec5, 0, row, 2, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Taille max upload (client_max_body_size) :", xalign=0), 0, row, 1, 1)
+        entry_max_body = Gtk.Entry(); entry_max_body.set_text(cfg.get("nginx_max_body", "20M")); grid.attach(entry_max_body, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Délai de connexion (proxy_connect_timeout) :", xalign=0), 0, row, 1, 1)
+        entry_conn_to = Gtk.Entry(); entry_conn_to.set_text(cfg.get("nginx_connect_timeout", "60s")); grid.attach(entry_conn_to, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Délai de lecture (proxy_read_timeout) :", xalign=0), 0, row, 1, 1)
+        entry_read_to = Gtk.Entry(); entry_read_to.set_text(cfg.get("nginx_read_timeout", "60s")); grid.attach(entry_read_to, 1, row, 1, 1); row += 1
+        
+        scroll.set_child(grid)
+        content.append(scroll)
+        
+        info_lbl = Gtk.Label(label="⚠️ Le fichier /etc/nginx/nginx.conf sera modifié directement. Assurez-vous que Nginx est installé.", css_classes=["dim-label"], margin_top=8, xalign=0)
+        content.append(info_lbl)
+        
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, halign=Gtk.Align.END, margin_top=12)
+        btn_cancel = Gtk.Button(label="Annuler")
+        btn_save = Gtk.Button(label="💾 Sauvegarder & Appliquer", css_classes=["suggested-action"])
+        btn_box.append(btn_cancel); btn_box.append(btn_save); content.append(btn_box)
+        
+        def on_save(*_):
+            mode = "reverse_proxy" if combo_mode.get_active() == 0 else "load_balancer"
+            new_cfg = {
+                "nginx_mode": mode,
+                "nginx_server_name": entry_name.get_text().strip(),
+                "nginx_listen_port": entry_port.get_text().strip(),
+                "nginx_force_https": sw_force.get_active(),
+                "nginx_upstream_servers": entry_upstream.get_text().strip(),
+                "nginx_proxy_pass": entry_proxy.get_text().strip(),
+                "nginx_custom_redirects": txt_redirects.get_buffer().get_text(txt_redirects.get_buffer().get_start_iter(), txt_redirects.get_buffer().get_end_iter(), True).strip(),
+                "nginx_static_url": entry_s_url.get_text().strip(),
+                "nginx_static_path": entry_s_path.get_text().strip(),
+                "nginx_media_url": entry_m_url.get_text().strip(),
+                "nginx_media_path": entry_m_path.get_text().strip(),
+                "nginx_ssl_cert": entry_cert.get_text().strip(),
+                "nginx_ssl_key": entry_key.get_text().strip(),
+                "nginx_security_headers": sw_headers.get_active(),
+                "nginx_proxy_buffering": sw_buffer.get_active(),
+                "nginx_max_body": entry_max_body.get_text().strip(),
+                "nginx_connect_timeout": entry_conn_to.get_text().strip(),
+                "nginx_read_timeout": entry_read_to.get_text().strip(),
+            }
+            cfg.update(new_cfg)
+            save_config(cfg)
+            self._update_nginx_conf()
+            self.show_toast("✅ Configuration Nginx sauvegardée et appliquée")
+            dialog.destroy()
+            
+        btn_save.connect("clicked", on_save)
+        btn_cancel.connect("clicked", lambda *_: dialog.destroy())
+        dialog.present()
+
+    def _update_nginx_conf(self, *_):
+        cfg = self.get_config()
+        conf_path = cfg.get("nginx_conf_path", "/etc/nginx/nginx.conf")
+        try:
+            with open(conf_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # 1. Upstream Block
+            servers_list = [f"    server {s.strip()};" for s in cfg.get("nginx_upstream_servers", "127.0.0.1:8000").split(",") if s.strip()]
+            upstream_content = "\n".join(servers_list)
+            upstream_name = cfg.get("nginx_upstream_name", "gunicorn")
+            if re.search(rf'upstream\s+{upstream_name}\s*\{{', content):
+                content = re.sub(rf'(upstream\s+{upstream_name}\s*\{{)(.*?)(\}})', rf'\1\n{upstream_content}\n\3', content, flags=re.DOTALL)
+            else:
+                upstream_block = f"upstream {upstream_name} {{\n    least_conn;\n{upstream_content}\n    keepalive 32;\n}}\n"
+                content = re.sub(r'(\s*# --- Redirection HTTP vers HTTPS ---\s*server\s*\{{)', rf'{upstream_block}\1', content, count=1)
+            
+            # 2. Server Name
+            content = re.sub(r'server_name\s+[^;]+;', f'server_name  {cfg.get("nginx_server_name", "localhost")};', content)
+            
+            # 3. Listen Ports & Force HTTPS
+            force_https = cfg.get("nginx_force_https", True)
+            listen_port = cfg.get("nginx_listen_port", "443")
+            if force_https:
+                http_redirect = f"""# --- Redirection HTTP vers HTTPS ---
+server {{
+    listen       80;
+    server_name  {cfg.get('nginx_server_name', 'localhost')};
+    return 301 https://$host$request_uri;
+}}"""
+                content = re.sub(r'# --- Redirection HTTP vers HTTPS ---\s*server\s*\{{[^}}]+\}}', http_redirect, content, flags=re.DOTALL)
+            else:
+                http_block = f"""# --- Redirection HTTP vers HTTPS ---
+server {{
+    listen       80;
+    server_name  {cfg.get('nginx_server_name', 'localhost')};
+}}"""
+                content = re.sub(r'# --- Redirection HTTP vers HTTPS ---\s*server\s*\{{[^}}]+\}}', http_block, content, flags=re.DOTALL)
+            
+            content = re.sub(r'listen\s+443\s+ssl\s+http2;', f'listen       {listen_port} ssl http2;', content)
+            
+            # 4. SSL Certificates
+            ssl_cert = cfg.get("nginx_ssl_cert", "/etc/pki/nginx/server.crt")
+            ssl_key = cfg.get("nginx_ssl_key", "/etc/pki/nginx/private/server.key")
+            content = re.sub(r'ssl_certificate\s+[^;]+;', f'ssl_certificate  "{ssl_cert}";', content)
+            content = re.sub(r'ssl_certificate_key\s+[^;]+;', f'ssl_certificate_key  "{ssl_key}";', content)
+            
+            # 5. Static and Media Locations
+            static_url = cfg.get("nginx_static_url", "/static/")
+            static_path = cfg.get("nginx_static_path", "/chemin/vers/ton/projet/static/")
+            content = re.sub(
+                r'# --- Fichiers Statiques ---\s*location\s+/static/\s*\{{.*?\n\s*\}}',
+                f"""# --- Fichiers Statiques ---
+location {static_url} {{
+    alias {static_path};
+    expires 30d;
+    add_header Cache-Control "public, no-transform";
+    access_log off;
+}}""",
+                content, flags=re.DOTALL
+            )
+            
+            media_url = cfg.get("nginx_media_url", "/media/")
+            media_path = cfg.get("nginx_media_path", "/chemin/vers/ton/projet/media/")
+            content = re.sub(
+                r'# --- Fichiers Media \(Sécurisés\) ---\s*location\s+/media/\s*\{{.*?\n\s*\}}',
+                f"""# --- Fichiers Media (Sécurisés) ---
+location {media_url} {{
+    alias {media_path};
+    # Empêche l'exécution de scripts malveillants uploadés
+    location ~* \.(php|py|pl|sh|cgi|exe)$ {{
+        deny all;
+    }}
+}}""",
+                content, flags=re.DOTALL
+            )
+            
+            # 6. Proxy Pass and Extra Configs
+            proxy_pass_url = cfg.get("nginx_proxy_pass", f"http://{upstream_name}")
+            max_body = cfg.get("nginx_max_body", "20M")
+            read_timeout = cfg.get("nginx_read_timeout", "60s")
+            connect_timeout = cfg.get("nginx_connect_timeout", "60s")
+            proxy_buffering = "on" if cfg.get("nginx_proxy_buffering", True) else "off"
+            
+            new_location = f"""# --- Proxy vers Gunicorn ---
+location / {{
+    proxy_pass {proxy_pass_url};
+    # Transmission correcte des informations client
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # Configurations Proxy Avancées
+    proxy_connect_timeout {connect_timeout};
+    proxy_read_timeout {read_timeout};
+    proxy_buffering {proxy_buffering};
+    # Limite la taille des uploads
+    client_max_body_size {max_body};
+}}"""
+            content = re.sub(r'# --- Proxy vers Gunicorn ---\s*location\s+/\s*\{{.*?\n\s*\}}', new_location, content, flags=re.DOTALL)
+            
+            # 7. Security Headers Toggle
+            if not cfg.get("nginx_security_headers", True):
+                content = re.sub(r'^\s*add_header\s+[^;]+;\s*$', '', content, flags=re.MULTILINE)
+            
+            # 8. Custom Redirects
+            custom_redirects = cfg.get("nginx_custom_redirects", "")
+            if custom_redirects.strip():
+                redirect_lines = []
+                for r in custom_redirects.split('\n'):
+                    if '->' in r:
+                        parts = r.split('->')
+                        redirect_lines.append(f"    rewrite ^{parts[0].strip()}$ {parts[1].strip()} permanent;")
+                if redirect_lines:
+                    redirect_block = "\n".join(redirect_lines) + "\n"
+                    content = re.sub(r'(# --- Proxy vers Gunicorn ---)', f'{redirect_block}\n\1', content)
+            
+            # Save with sudo via tee
+            self.terminal._log("📝 Mise à jour de /etc/nginx/nginx.conf...")
+            proc = subprocess.run(["sudo", "tee", conf_path], input=content, text=True, capture_output=True)
+            if proc.returncode == 0:
+                self.terminal._log("✅ Fichier nginx.conf mis à jour avec succès.")
+            else:
+                self.terminal._log(f"❌ Erreur lors de l'écriture : {proc.stderr}")
+                
+        except Exception as e:
+            self.terminal._log(f"❌ Exception lors de la modification de nginx.conf : {e}")
+            self.show_toast("❌ Échec de la modification de nginx.conf")
+
+    def _run_nginx_start(self, *_):
+        self.terminal._log("🌐 === Démarrage de Nginx ===")
+        def _thread():
+            try:
+                self._update_nginx_conf()
+                self.terminal._log("▶ sudo systemctl start nginx")
+                subprocess.run(["sudo", "systemctl", "start", "nginx"], check=True)
+                GLib.idle_add(self._set_dot, "nginx", True)
+                GLib.idle_add(self.show_toast, "✅ Nginx démarré")
+                GLib.idle_add(self.terminal._log, "=== Nginx READY ===")
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self._set_dot, "nginx", False)
+                GLib.idle_add(self.terminal._log, f"❌ Erreur systemctl: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec du démarrage Nginx")
+            except Exception as e:
+                GLib.idle_add(self._set_dot, "nginx", False)
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_nginx_stop(self, *_):
+        self.terminal._log("🛑 === Arrêt de Nginx ===")
+        def _thread():
+            try:
+                subprocess.run(["sudo", "systemctl", "stop", "nginx"], check=True)
+                GLib.idle_add(self._set_dot, "nginx", False)
+                GLib.idle_add(self.show_toast, "✅ Nginx arrêté")
+                GLib.idle_add(self.terminal._log, "=== Nginx STOPPED ===")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_nginx_restart(self, *_):
+        self.terminal._log("🔄 === Redémarrage de Nginx ===")
+        def _thread():
+            try:
+                self._update_nginx_conf()
+                subprocess.run(["sudo", "systemctl", "restart", "nginx"], check=True)
+                GLib.idle_add(self._set_dot, "nginx", True)
+                GLib.idle_add(self.show_toast, "✅ Nginx redémarré")
+                GLib.idle_add(self.terminal._log, "=== Nginx RESTARTED ===")
+            except Exception as e:
+                GLib.idle_add(self._set_dot, "nginx", False)
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec du redémarrage")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    # ═══════════════════════════════════════════════════════════
+    #  GESTION SSH INTÉGRÉE (AVANCÉE)
+    # ═══════════════════════════════════════════════════════════
+    def _show_ssh_config_dialog(self, *_):
+        cfg = self.get_config()
+        dialog = Gtk.Dialog(title="⚙ Configuration SSH", transient_for=self.get_root())
+        dialog.set_default_size(450, 400)
+        content = dialog.get_content_area()
+        content.set_spacing(10)
+        set_margins(content, 16)
+        
+        grid = Gtk.Grid()
+        grid.set_row_spacing(8)
+        grid.set_column_spacing(8)
+        row = 0
+        
+        # Serveur
+        lbl_srv = Gtk.Label(label="🖥️ Serveur SSH Local", css_classes=["control-section-title"], xalign=0, margin_bottom=4)
+        grid.attach(lbl_srv, 0, row, 2, 1); row += 1
+        grid.attach(Gtk.Label(label="Port Serveur :", xalign=0), 0, row, 1, 1)
+        entry_srv_port = Gtk.Entry(); entry_srv_port.set_text(str(cfg.get("ssh_server_port", "22"))); grid.attach(entry_srv_port, 1, row, 1, 1); row += 1
+        
+        # Client
+        lbl_cli = Gtk.Label(label="🔗 Client SSH Distants", css_classes=["control-section-title"], xalign=0, margin_top=8, margin_bottom=4)
+        grid.attach(lbl_cli, 0, row, 2, 1); row += 1
+        grid.attach(Gtk.Label(label="Hôte/IP :", xalign=0), 0, row, 1, 1)
+        entry_host = Gtk.Entry(); entry_host.set_text(cfg.get("ssh_client_host", "192.168.1.10")); grid.attach(entry_host, 1, row, 1, 1); row += 1
+        grid.attach(Gtk.Label(label="Port :", xalign=0), 0, row, 1, 1)
+        entry_port = Gtk.Entry(); entry_port.set_text(str(cfg.get("ssh_client_port", "22"))); grid.attach(entry_port, 1, row, 1, 1); row += 1
+        grid.attach(Gtk.Label(label="Utilisateur :", xalign=0), 0, row, 1, 1)
+        entry_user = Gtk.Entry(); entry_user.set_text(cfg.get("ssh_client_user", "root")); grid.attach(entry_user, 1, row, 1, 1); row += 1
+        
+        # Auth Mode
+        grid.attach(Gtk.Label(label="Mode Auth :", xalign=0), 0, row, 1, 1)
+        combo_auth = Gtk.ComboBoxText()
+        combo_auth.append_text("Clé Privée (Key)")
+        combo_auth.append_text("Mot de passe (Password)")
+        combo_auth.set_active(0 if cfg.get("ssh_client_auth_mode", "key") == "key" else 1)
+        grid.attach(combo_auth, 1, row, 1, 1); row += 1
+        
+        grid.attach(Gtk.Label(label="Chemin Clé Privée :", xalign=0), 0, row, 1, 1)
+        entry_key = Gtk.Entry(); entry_key.set_text(cfg.get("ssh_client_key", "~/.ssh/id_rsa")); entry_key.set_tooltip_text("Laisser vide si mot de passe"); grid.attach(entry_key, 1, row, 1, 1); row += 1
+        
+        content.append(grid)
+        
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, halign=Gtk.Align.END, margin_top=12)
+        btn_cancel = Gtk.Button(label="Annuler")
+        btn_save = Gtk.Button(label="💾 Sauvegarder", css_classes=["suggested-action"])
+        btn_box.append(btn_cancel); btn_box.append(btn_save); content.append(btn_box)
+        
+        def on_save(*_):
+            auth_mode = "key" if combo_auth.get_active() == 0 else "password"
+            new_cfg = {
+                "ssh_server_port": entry_srv_port.get_text().strip(),
+                "ssh_client_host": entry_host.get_text().strip(),
+                "ssh_client_port": entry_port.get_text().strip(),
+                "ssh_client_user": entry_user.get_text().strip(),
+                "ssh_client_auth_mode": auth_mode,
+                "ssh_client_key": entry_key.get_text().strip(),
+            }
+            cfg.update(new_cfg)
+            save_config(cfg)
+            self.show_toast("✅ Configuration SSH sauvegardée")
+            dialog.destroy()
+            
+        btn_save.connect("clicked", on_save)
+        btn_cancel.connect("clicked", lambda *_: dialog.destroy())
+        dialog.present()
+
+    def _run_ssh_server_start(self, *_):
+        cfg = self.get_config()
+        port = cfg.get("ssh_server_port", "22")
+        self.terminal._log(f"🔐 === Démarrage Serveur SSH (Port {port}) ===")
+        def _thread():
+            try:
+                if not shutil.which("sshd"):
+                    GLib.idle_add(self.terminal._log, "❌ sshd non trouvé. Veuillez installer openssh-server.")
+                    GLib.idle_add(self.show_toast, "❌ sshd manquant")
+                    return
+                GLib.idle_add(self.terminal._log, "▶ sudo systemctl restart sshd")
+                subprocess.run(["sudo", "systemctl", "restart", "sshd"], check=True)
+                if is_port_in_use(int(port)):
+                    GLib.idle_add(self._set_dot, "ssh_server", True)
+                    GLib.idle_add(self.show_toast, f"✅ Serveur SSH actif sur port {port}")
+                    GLib.idle_add(self.terminal._log, f"=== READY : Port {port} ===")
+                else:
+                    GLib.idle_add(self.terminal._log, "⚠ Le service a démarré mais le port semble fermé.")
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self.terminal._log, f"❌ Erreur systemctl: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec démarrage SSH")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_ssh_client_connect(self, *_):
+        cfg = self.get_config()
+        host = cfg.get("ssh_client_host", "192.168.1.10")
+        port = cfg.get("ssh_client_port", "22")
+        user = cfg.get("ssh_client_user", "root")
+        auth_mode = cfg.get("ssh_client_auth_mode", "key")
+        key_path = cfg.get("ssh_client_key", "")
+        self.terminal._log(f"🔗 === Connexion SSH vers {user}@{host}:{port} ===")
+        
+        # Construction de la commande SSH
+        cmd_parts = ["ssh"]
+        if port != "22":
+            cmd_parts.extend(["-p", str(port)])
+        if auth_mode == "key" and key_path:
+            # Expansion du ~ pour le chemin home
+            expanded_key = os.path.expanduser(key_path)
+            cmd_parts.extend(["-i", expanded_key])
+            # Désactiver l'auth par mot de passe si on utilise une clé
+            cmd_parts.extend(["-o", "PasswordAuthentication=no"])
+        cmd_parts.append(f"{user}@{host}")
+        final_cmd = " ".join(cmd_parts)
+        
+        # Lancement dans le TTY Natif
+        NativeTtyTerminal(self.get_root(), f"SSH: {user}@{host}", final_cmd)
+
+    def _run_ssh_client_disconnect_dummy(self, *_):
+        self.terminal._log("ℹ️ Pour déconnecter SSH, tapez 'exit' dans le terminal TTY ouvert.")
+        self.show_toast("ℹ️ Utilisez 'exit' dans le terminal")
+
+    # ═══════════════════════════════════════════════════════════
+    #  GESTION VENV INTÉGRÉE
+    # ═══════════════════════════════════════════════════════════
+    def _run_venv_create(self, *_):
+        root = self.get_project_root()
+        if not root: return self.show_toast("❌ Aucun projet ouvert")
+        cfg = self.get_config()
+        venv_name = cfg.get("venv_name", "venv")
+        venv_path = root / venv_name
+        if venv_path.exists():
+            if Gtk.MessageDialog(transient_for=self.get_root(), flags=0, message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.YES_NO, text="Venv existant", secondary_text=f"{venv_name} existe déjà. Recréer ?").run() != Gtk.ResponseType.YES:
+                return
+        self.terminal._log(f"🐍 === Création environnement virtuel: {venv_name} ===")
+        def _thread():
+            try:
+                GLib.idle_add(self.terminal._log, f"▶ python3 -m venv {venv_name}")
+                subprocess.run([sys.executable, "-m", "venv", str(venv_path)], check=True)
+                GLib.idle_add(self._set_dot, "venv_create", True)
+                GLib.idle_add(self.show_toast, f"✅ Venv '{venv_name}' créé")
+                GLib.idle_add(self.terminal._log, "=== OK ===")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Erreur: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec création venv")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _show_venv_install_dialog(self, *_):
+        root = self.get_project_root()
+        if not root: return self.show_toast("❌ Aucun projet ouvert")
+        cfg = self.get_config()
+        venv_name = cfg.get("venv_name", "venv")
+        venv_path = root / venv_name
+        if not venv_path.exists():
+            return self.show_toast(f"❌ Venv '{venv_name}' introuvable. Créez-le d'abord.")
+        
+        dialog = Gtk.Dialog(title="Installer Module Pip", transient_for=self.get_root())
+        dialog.set_default_size(400, 200)
+        content = dialog.get_content_area()
+        content.set_spacing(10)
+        set_margins(content, 16)
+        content.append(Gtk.Label(label=f"Installer dans: {venv_name}", xalign=0, css_classes=["dim-label"]))
+        entry_pkg = Gtk.Entry(); entry_pkg.set_placeholder_text("ex: django, pandas, requests"); content.append(entry_pkg)
+        
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, halign=Gtk.Align.END, margin_top=12)
+        btn_cancel = Gtk.Button(label="Annuler")
+        btn_install = Gtk.Button(label="📦 Installer", css_classes=["suggested-action"])
+        btn_box.append(btn_cancel); btn_box.append(btn_install); content.append(btn_box)
+        
+        def on_install(*_):
+            pkg = entry_pkg.get_text().strip()
+            if not pkg: return
+            pip_path = str(venv_path / "bin" / "pip")
+            if not Path(pip_path).exists(): pip_path = str(venv_path / "Scripts" / "pip.exe") # Windows fallback
+            self.terminal._log(f"📦 Installation de {pkg}...")
+            # Utilisation du TTY pour voir la progression
+            cmd = f"{pip_path} install {pkg}"
+            NativeTtyTerminal(self.get_root(), f"Pip Install: {pkg}", cmd, cwd=str(root))
+            dialog.destroy()
+            
+        btn_install.connect("clicked", on_install)
+        btn_cancel.connect("clicked", lambda *_: dialog.destroy())
+        dialog.present()
+
+    def _run_venv_delete(self, *_):
+        root = self.get_project_root()
+        if not root: return self.show_toast("❌ Aucun projet ouvert")
+        cfg = self.get_config()
+        venv_name = cfg.get("venv_name", "venv")
+        venv_path = root / venv_name
+        if not venv_path.exists():
+            return self.show_toast(f"❌ Venv '{venv_name}' introuvable.")
+        if Gtk.MessageDialog(transient_for=self.get_root(), flags=0, message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.YES_NO, text="Supprimer Venv", secondary_text=f"Êtes-vous sûr de vouloir supprimer {venv_name} ?").run() != Gtk.ResponseType.YES:
+            return
+        self.terminal._log(f"🗑 Suppression de {venv_name}...")
+        try:
+            shutil.rmtree(venv_path)
+            self.show_toast(f"✅ Venv '{venv_name}' supprimé")
+            self.terminal._log("=== OK ===")
+        except Exception as e:
+            self.terminal._log(f"❌ Erreur: {e}")
+
+    def _run_venv_activate(self, *_):
+        root = self.get_project_root()
+        if not root: return self.show_toast("❌ Aucun projet ouvert")
+        cfg = self.get_config()
+        venv_name = cfg.get("venv_name", "venv")
+        venv_path = root / venv_name
+        if not venv_path.exists():
+            return self.show_toast(f"❌ Venv '{venv_name}' introuvable.")
+        self.terminal._log(f"⚡ === Activation Shell Venv: {venv_name} ===")
+        activate_script = str(venv_path / "bin" / "activate")
+        if not Path(activate_script).exists():
+            activate_script = str(venv_path / "Scripts" / "activate.bat") # Windows
+        cmd = f"bash --init-file {activate_script}"
+        NativeTtyTerminal(self.get_root(), f"Shell Activé: {venv_name}", cmd, cwd=str(root))
+
+    def _run_venv_deactivate_dummy(self, *_):
+        self.terminal._log("ℹ️ Pour désactiver le venv, tapez 'deactivate' dans le terminal TTY ouvert.")
+        self.show_toast("ℹ️ Utilisez 'deactivate' dans le terminal")
+
+    # ═══════════════════════════════════════════════════════════
+    #  VISUALISATION DES DONNÉES ET EXPORT (TABLEAU RÉEL)
+    # ═══════════════════════════════════════════════════════════
+    def _show_db_stats(self, *_):
+        mp = self._manage_path()
+        if not mp:
+            self.terminal._log("❌ manage.py introuvable. Ouvrez d'abord un projet Django valide.")
+            self.show_toast("❌ Projet Django non détecté"); return
+        
+        self.terminal._log("🔍 Récupération des données via Django ORM (max 100 lignes/table)...")
+        self.show_toast("⏳ Chargement des données...")
+        
+        django_script = """
+import json
+from django.apps import apps
+from django.db import models
+
+result = []
+for model in apps.get_models():
+    try:
+        fields_info = []
+        for f in model._meta.fields:
+            fields_info.append({"name": f.name, "type": f.get_internal_type(), "is_pk": bool(f.primary_key), "is_fk": isinstance(f, (models.ForeignKey, models.OneToOneField))})
+        
+        rows_data = []
+        try:
+            qs = model.objects.all()[:100]
+            for obj in qs:
+                row_dict = {}
+                for f in model._meta.fields:
+                    val = getattr(obj, f.name)
+                    row_dict[f.name] = str(val) if val is not None else "NULL"
+                rows_data.append(row_dict)
+        except Exception as e:
+            rows_data = [{"_error": str(e)}]
+            
+        result.append({"table": model._meta.db_table, "model": model._meta.object_name, "total_rows": model.objects.count(), "fields": fields_info, "data": rows_data})
+    except Exception as e:
+        result.append({"table": model._meta.db_table, "error": str(e)})
+
+print(json.dumps(result, default=str))
+"""
+        cmd = [sys.executable, str(mp), "shell", "-c", django_script]
+        def _thread():
+            try:
+                env = os.environ.copy(); env["PYTHONUNBUFFERED"] = "1"
+                proc = subprocess.run(cmd, cwd=str(mp.parent), capture_output=True, text=True, env=env, timeout=20)
+                if proc.returncode == 0:
+                    output = proc.stdout.strip(); stats = []
+                    for line in reversed(output.split('\n')):
+                        line = line.strip()
+                        if line.startswith('[') or line.startswith('{'):
+                            try: stats = json.loads(line); break
+                            except json.JSONDecodeError: continue
+                    if stats: GLib.idle_add(self._display_db_stats_popup, stats)
+                    else:
+                        GLib.idle_add(self.terminal._log, f"❌ Erreur de parsing JSON. Sortie brute: {output}")
+                        GLib.idle_add(self.show_toast, "❌ Erreur de format des données")
+                else:
+                    GLib.idle_add(self.terminal._log, f"❌ Erreur Django ORM: {proc.stderr}")
+                    GLib.idle_add(self.show_toast, "❌ Échec de la récupération")
+            except subprocess.TimeoutExpired:
+                GLib.idle_add(self.terminal._log, "❌ Délai d'attente dépassé (la base est peut-être trop volumineuse).")
+                GLib.idle_add(self.show_toast, "⏱ Délai dépassé")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+                GLib.idle_add(self.show_toast, "❌ Erreur inattendue")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _display_db_stats_popup(self, stats: list):
+        self.db_stats_data = stats; self.current_selected_table_data = None
+        dialog = Gtk.Dialog(title="📊 Visualisation des Tables et Données", transient_for=self.get_root()); dialog.set_default_size(1000, 650)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12); set_margins(content, 16); dialog.set_child(content)
+        
+        header_info = Gtk.Label(label=f"{len(stats)} table(s) trouvée(s). Cliquez sur une table pour voir ses données (max 100 lignes)."); header_info.add_css_class("heading"); content.append(header_info); content.append(Gtk.Separator())
+        
+        main_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12); main_box.set_vexpand(True)
+        scroll_tables = Gtk.ScrolledWindow(); scroll_tables.set_size_request(250, -1)
+        self.listbox_tables = Gtk.ListBox(); self.listbox_tables.set_selection_mode(Gtk.SelectionMode.SINGLE); scroll_tables.set_child(self.listbox_tables); main_box.append(scroll_tables)
+        
+        details_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8); details_box.set_hexpand(True)
+        self.current_table_label = Gtk.Label(label="Sélectionnez une table pour voir les données", xalign=0); self.current_table_label.add_css_class("heading"); details_box.append(self.current_table_label)
+        scroll_fields = Gtk.ScrolledWindow(); scroll_fields.set_vexpand(True); scroll_fields.set_hexpand(True)
+        self.data_store = Gtk.ListStore(); self.tree_view = Gtk.TreeView(model=self.data_store); scroll_fields.set_child(self.tree_view); details_box.append(scroll_fields)
+        
+        export_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8); export_box.set_halign(Gtk.Align.END)
+        self.btn_csv = Gtk.Button(label="📄 Exporter CSV"); self.btn_csv.add_css_class("ctrl-btn"); self.btn_csv.set_sensitive(False); self.btn_csv.connect("clicked", lambda *_: self._export_to_csv())
+        self.btn_excel = Gtk.Button(label="📊 Exporter Excel (Pandas)"); self.btn_excel.add_css_class("ctrl-btn"); self.btn_excel.set_sensitive(False); self.btn_excel.connect("clicked", lambda *_: self._export_to_excel())
+        export_box.append(self.btn_csv); export_box.append(self.btn_excel); details_box.append(export_box)
+        
+        main_box.append(details_box); content.append(main_box)
+        
+        if not stats:
+            lbl_empty = Gtk.Label(label="Aucune table trouvée ou base de données vide."); lbl_empty.set_margin_top(20); lbl_empty.add_css_class("dim-label"); self.listbox_tables.append(lbl_empty)
+        else:
+            for item in stats:
+                row = Gtk.ListBoxRow()
+                if "error" in item:
+                    lbl = Gtk.Label(label=f"⚠️ {item['table']} (Erreur)", xalign=0); lbl.add_css_class("dim-label")
+                else:
+                    lbl = Gtk.Label(label=f"🗄 {item['table']} ({item['total_rows']} lignes)", xalign=0); lbl.set_margin_start(8); lbl.set_margin_top(6); lbl.set_margin_bottom(6)
+                row.set_child(lbl); row._data = item; self.listbox_tables.append(row)
+        
+        self.listbox_tables.connect("row-selected", self._on_table_selected)
+        
+        btn_close = Gtk.Button(label="Fermer"); btn_close.set_halign(Gtk.Align.END); btn_close.set_margin_top(8); btn_close.connect("clicked", lambda *_: dialog.destroy()); content.append(btn_close)
+        dialog.present()
+
+    def _on_table_selected(self, listbox, row):
+        self.data_store.clear()
+        for col in self.tree_view.get_columns():
+            self.tree_view.remove_column(col)
+        
+        if not row or not hasattr(row, "_data"):
+            self.current_table_label.set_text("Sélectionnez une table pour voir les données")
+            self.current_selected_table_data = None; self.btn_csv.set_sensitive(False); self.btn_excel.set_sensitive(False); return
+        
+        item = row._data; self.current_selected_table_data = item
+        if "error" in item:
+            self.current_table_label.set_text(f"⚠️ Erreur sur la table: {item['table']}")
+            self.btn_csv.set_sensitive(False); self.btn_excel.set_sensitive(False); return
+        
+        self.current_table_label.set_text(f"🗄 Table: {item['table']} (Affichage de {len(item['data'])} / {item['total_rows']} lignes)")
+        self.btn_csv.set_sensitive(True); self.btn_excel.set_sensitive(True)
+        
+        fields = item.get("fields", []); data_rows = item.get("data", []); col_types = [str] * len(fields)
+        self.data_store = Gtk.ListStore(*col_types); self.tree_view.set_model(self.data_store)
+        
+        for idx, field in enumerate(fields):
+            renderer = Gtk.CellRendererText(); title = field["name"]
+            if field["is_pk"]:
+                title = f"🔑 {title}"; renderer.set_property("foreground", "#f1c40f"); renderer.set_property("weight", Pango.Weight.BOLD)
+            elif field["is_fk"]:
+                title = f"🔗 {title}"; renderer.set_property("foreground", "#3498db")
+            col = Gtk.TreeViewColumn(title, renderer, text=idx); col.set_resizable(True); col.set_min_width(100); self.tree_view.append_column(col)
+        
+        for row_data in data_rows:
+            if "_error" in row_data:
+                self.data_store.append([f"Erreur de lecture: {row_data['_error']}"] + [""] * (len(fields) - 1)); break
+            row_values = [str(row_data.get(f["name"], "")) for f in fields]
+            self.data_store.append(row_values)
+
+    def _export_to_csv(self):
+        if not self.current_selected_table_data: return
+        try:
+            dialog = Gtk.FileDialog(title=f"Exporter {self.current_selected_table_data['table']} en CSV")
+            dialog.save(self.get_root(), None, self._on_csv_save_selected)
+        except Exception as e:
+            self.terminal._log(f"❌ Erreur export CSV: {e}"); self.show_toast("❌ Échec de l'export CSV")
+
+    def _on_csv_save_selected(self, dialog, result):
+        try:
+            file = dialog.save_finish(result)
+            if not file: return
+            filepath = Path(file.get_path())
+            if not str(filepath).endswith('.csv'): filepath = filepath.with_suffix('.csv')
+            import csv
+            item = self.current_selected_table_data; fields = item.get("fields", []); data_rows = item.get("data", [])
+            with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f); writer.writerow([f["name"] for f in fields])
+                for row_data in data_rows:
+                    if "_error" not in row_data: writer.writerow([row_data.get(f["name"], "") for f in fields])
+            self.terminal._log(f"✅ Export CSV réussi: {filepath} ({len(data_rows)} lignes)"); self.show_toast("✅ Export CSV réussi")
+        except Exception as e:
+            self.terminal._log(f"❌ Erreur lors de l'écriture du CSV: {e}"); self.show_toast("❌ Échec de l'export CSV")
+
+    def _export_to_excel(self):
+        if not self.current_selected_table_data: return
+        try:
+            import pandas as pd
+            dialog = Gtk.FileDialog(title=f"Exporter {self.current_selected_table_data['table']} en Excel")
+            dialog.save(self.get_root(), None, self._on_excel_save_selected)
+        except ImportError:
+            self.terminal._log("❌ Pandas n'est pas installé. Veuillez l'installer avec: pip install pandas openpyxl")
+            self.show_toast("❌ Pandas non installé (pip install pandas openpyxl)")
+        except Exception as e:
+            self.terminal._log(f"❌ Erreur export Excel: {e}"); self.show_toast("❌ Échec de l'export Excel")
+
+    def _on_excel_save_selected(self, dialog, result):
+        try:
+            import pandas as pd
+            file = dialog.save_finish(result)
+            if not file: return
+            filepath = Path(file.get_path())
+            if not str(filepath).endswith('.xlsx'): filepath = filepath.with_suffix('.xlsx')
+            item = self.current_selected_table_data; fields = item.get("fields", []); data_rows = item.get("data", [])
+            clean_data = []
+            for row_data in data_rows:
+                if "_error" not in row_data: clean_data.append({f["name"]: row_data.get(f["name"], "") for f in fields})
+            df = pd.DataFrame(clean_data); df.to_excel(filepath, index=False, engine='openpyxl')
+            self.terminal._log(f"✅ Export Excel réussi: {filepath} ({len(clean_data)} lignes)"); self.show_toast("✅ Export Excel réussi")
+        except ImportError:
+            self.terminal._log("❌ Pandas ou openpyxl n'est pas installé. Veuillez l'installer avec: pip install pandas openpyxl")
+            self.show_toast("❌ Pandas/openpyxl non installé")
+        except Exception as e:
+            self.terminal._log(f"❌ Erreur lors de l'écriture du fichier Excel: {e}"); self.show_toast("❌ Échec de l'export Excel")
+
+    def _run_gy(self, rel_path: str, sudo=False):
+        root = self.get_project_root()
+        if not root: return
+        gy_path = root / rel_path
+        if not gy_path.exists(): return self.terminal._log(f"❌ Not found: {gy_path}")
+        self._run_cmd(["sudo", sys.executable, str(gy_path)] if sudo else [sys.executable, str(gy_path)], cwd=str(gy_path.parent), name=f"gy_{rel_path}")
+
+    def _start_llama(self, *_):
+        cfg = self.get_config(); server, model, host, port = cfg.get("llama_server_path", "llama-server"), cfg.get("llama_model_path", ""), cfg.get("llama_host", "127.0.0.1"), cfg.get("llama_port", "8080")
+        if not model: return self.terminal._log("❌ Model not configured")
+        if not shutil.which(server) and not Path(server).exists(): return self.terminal._log(f"❌ llama-server not found")
+        if is_port_in_use(int(port), host):
+            new_port = find_free_port(int(port) + 1, int(port) + 10, host)
+            if new_port: port = str(new_port); self.terminal._log(f"🔄 Alternative port {port}")
+            else: return self.terminal._log("❌ No alternative port")
+        self.terminal._log(f"🤖 llama-server → {host}:{port}")
+        self._run_cmd([server, "-m", model, "--host", host, "--port", port], name="llama")
+        if cfg.get("open_browser_on_run", True): GLib.timeout_add_seconds(3, lambda: self._open_browser_url(f"http://{host}:{port}"))
+
+    def _open_browser(self, *_): self._open_browser_url("http://localhost:8000")
+    def _open_browser_url(self, url):
+        user = os.environ.get("SUDO_USER", "gykhamine")
+        self.terminal._log(f"🌐 Ouverture de {url} en tant que {user}...")
+        try: subprocess.run(["sudo", "-u", user, "xdg-open", url], check=False)
+        except Exception as e: self.terminal._log(f"❌ Erreur d'ouverture du navigateur: {e}"); return False
+
+    def _compress_project(self, *_):
+        root = self.get_project_root()
+        if not root: return self.terminal._log("❌ No project open")
+        dialog = Gtk.Dialog(title="Save ZIP archive", transient_for=self.get_root()); dialog.set_default_size(500, 150)
+        content = dialog.get_content_area(); set_margins(content, 12); content.set_spacing(8)
+        box_path = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        entry_path = Gtk.Entry(); entry_path.set_hexpand(True); entry_path.set_text(str(root.parent / f"{root.name}.zip"))
+        btn_browse = Gtk.Button(label="📂 Browse"); box_path.append(entry_path); box_path.append(btn_browse)
+        content.append(Gtk.Label(label="Destination path:", xalign=0)); content.append(box_path)
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_cancel = Gtk.Button(label="Cancel"); btn_save = Gtk.Button(label="💾 Compress"); btn_save.add_css_class("suggested-action")
+        btn_box.append(btn_cancel); btn_box.append(btn_save); content.append(btn_box)
+        def on_browse(*_): Gtk.FileDialog(title="Choose destination folder").select_folder(self.get_root(), None, lambda d, r: self._on_folder_selected(d, r, entry_path))
+        def on_save(*_):
+            zip_path = entry_path.get_text().strip()
+            if not zip_path: return
+            if not zip_path.endswith('.zip'): zip_path += '.zip'
+            try:
+                self.terminal._log(f"🗜 Compressing to {zip_path}...")
+                with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    for file_path in root.rglob('*'):
+                        if file_path.is_file() and not any(x in str(file_path) for x in ["__pycache__", ".git", "venv", "node_modules"]):
+                            zipf.write(file_path, file_path.relative_to(root.parent))
+                self.terminal._log(f"✅ Project compressed: {zip_path}"); self.show_toast("📦 Project compressed"); dialog.destroy()
+            except Exception as e: self.terminal._log(f"❌ Error: {e}"); self.show_toast("❌ Failed")
+        btn_browse.connect("clicked", on_browse); btn_save.connect("clicked", on_save); btn_cancel.connect("clicked", lambda *_: dialog.destroy()); dialog.present()
+
+    def _on_folder_selected(self, dialog, result, entry):
+        try:
+            folder = dialog.select_folder_finish(result)
+            if folder: entry.set_text(str(Path(folder.get_path()) / f"{self.get_project_root().name}.zip"))
+        except Exception: pass
+
+    def _decompress_archive(self, *_):
+        Gtk.FileDialog(title="Select a .zip archive").open(self.get_root(), None, self._on_decompress_selected)
+
+    def _on_decompress_selected(self, dialog, result):
+        try:
+            file = dialog.open_finish(result)
+            if not file: return
+            archive_path, root = Path(file.get_path()), self.get_project_root()
+            extract_to = root.parent if root else Path.home()
+            self.terminal._log(f"📂 Decompressing {archive_path.name} to {extract_to}...")
+            with zipfile.ZipFile(archive_path, 'r') as zipf: zipf.extractall(path=extract_to)
+            self.terminal._log("✅ Decompression finished."); self.show_toast("📂 Archive decompressed")
+        except Exception as e: self.terminal._log(f"❌ Error: {e}"); self.show_toast("❌ Failed")
 
 # ═══════════════════════════════════════════════════════════════════════
 #  C COMPILER POPUP
@@ -1354,7 +2462,6 @@ class CCompilerDialog(Gtk.Dialog):
         btn_compile = Gtk.Button(label="▶ Compiler", css_classes=["suggested-action"])
         btn_compile.connect("clicked", self._on_compile)
         header_box.append(btn_compile)
-        
         content.append(header_box)
         content.append(Gtk.Separator())
         
@@ -1365,7 +2472,7 @@ class CCompilerDialog(Gtk.Dialog):
         self.text_view.set_monospace(True)
         self.text_view.set_wrap_mode(Gtk.WrapMode.NONE)
         self.text_view.add_css_class("code-editor")
-        self.text_view.get_buffer().set_text("// Collez votre code C ici\n#include <stdio.h>\n\nint main() {\n    printf(\"Hello from Gykhamine!\\n\");\n    return 0;\n}")
+        self.text_view.get_buffer().set_text("// Collez votre code C ici\n#include <stdio.h>\nint main() {\n    printf(\"Hello from Gykhamine!\\n\");\n    return 0;\n}")
         apply_syntax_highlighting(self.text_view, "c")
         self.scrolled.set_child(self.text_view)
         content.append(self.scrolled)
@@ -1388,37 +2495,36 @@ class CCompilerDialog(Gtk.Dialog):
         btn_close.connect("clicked", lambda *_: self.destroy())
         btn_box.append(btn_close)
         content.append(btn_box)
-        
+
     def _log(self, text):
         buf = self.log_view.get_buffer()
         buf.insert(buf.get_end_iter(), f"{text}\n")
         adj = self.log_view.get_parent().get_vadjustment()
         adj.set_value(adj.get_upper())
-        
+
     def _on_compile(self, *_):
         code = self.text_view.get_buffer().get_text(self.text_view.get_buffer().get_start_iter(), self.text_view.get_buffer().get_end_iter(), True)
         if not code.strip():
             self._log("❌ Aucun code à compiler.")
             return
-            
+        
         # Save to temp file
         import tempfile
         fd, src_path = tempfile.mkstemp(suffix=".c")
         try:
             with os.fdopen(fd, 'w') as f:
                 f.write(code)
-                
+            
             output_type = self.combo_type.get_active()
             out_ext = ".out"
             gcc_flags = []
-            
             if output_type == 1: # .so
                 out_ext = ".so"
                 gcc_flags = ["-shared", "-fPIC"]
             elif output_type == 2: # .ko
                 out_ext = ".ko"
                 gcc_flags = ["-c"] # Simplified for demo, real kernel modules need Makefiles
-                
+            
             out_path = src_path.replace(".c", out_ext)
             self.current_output_file = out_path
             
@@ -1426,7 +2532,6 @@ class CCompilerDialog(Gtk.Dialog):
             if output_type == 1: cmd.append("-lm") # Link math lib for .so usually
             
             self._log(f"▶ Compilation: {' '.join(cmd)}")
-            
             proc = subprocess.run(cmd, capture_output=True, text=True)
             
             if proc.returncode == 0:
@@ -1435,9 +2540,8 @@ class CCompilerDialog(Gtk.Dialog):
             else:
                 self._log(f"❌ Erreur de compilation:")
                 self._log(proc.stderr)
-                
         finally:
-            # Keep source if needed, but clean up if desired. 
+            # Keep source if needed, but clean up if desired.
             # For now, let's keep the .out/.so in temp dir unless user moves it.
             pass
 
@@ -1475,7 +2579,7 @@ class TabButton(Gtk.Box):
         gesture = Gtk.GestureClick.new()
         gesture.connect("pressed", lambda *_: on_activate(file_path))
         self.add_controller(gesture)
-        
+
     def set_active(self, active):
         if active: self.add_css_class("active-tab")
         else: self.remove_css_class("active-tab")
@@ -1498,13 +2602,12 @@ class BlockEditorView(Gtk.Box):
         
         self.file_label = Gtk.Label(label="Select a file"); self.file_label.add_css_class("editor-file-label"); self.file_label.set_xalign(0)
         set_margins(self.file_label, 12); self.append(self.file_label); self.append(Gtk.Separator())
-        
         self._build_toolbar()
         
         self.scroll = Gtk.ScrolledWindow(); self.scroll.set_vexpand(True); self.scroll.set_hexpand(True); self.scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.blocks_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8); set_margins(self.blocks_box, 16)
         self.scroll.set_child(self.blocks_box); self.append(self.scroll)
-        
+
     def _build_toolbar(self):
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8); set_margins(bar, 8)
         bar.append(Gtk.Label(label="Blocks:", css_classes=["toolbar-label"]))
@@ -1531,12 +2634,11 @@ class BlockEditorView(Gtk.Box):
         if file_path in self.open_tabs:
             self._activate_tab(file_path)
             return
-            
         tab_btn = TabButton(file_path, self._close_tab, self._activate_tab)
         self.open_tabs[file_path] = tab_btn
         self.tab_bar.append(tab_btn)
         self._activate_tab(file_path)
-        
+
     def _activate_tab(self, file_path):
         if self.active_tab_path == file_path: return
         self.active_tab_path = file_path
@@ -1544,7 +2646,7 @@ class BlockEditorView(Gtk.Box):
             btn.set_active(path == file_path)
         # Load file content
         self.load_file(Path(file_path))
-        
+
     def _close_tab(self, file_path):
         if file_path in self.open_tabs:
             btn = self.open_tabs.pop(file_path)
@@ -1555,10 +2657,10 @@ class BlockEditorView(Gtk.Box):
                 while child := self.blocks_box.get_first_child(): self.blocks_box.remove(child)
                 self._cards = []
                 self.blocks = []
-                # Activate another tab if available
-                if self.open_tabs:
-                    next_path = list(self.open_tabs.keys())[0]
-                    self._activate_tab(next_path)
+            # Activate another tab if available
+            if self.open_tabs:
+                next_path = list(self.open_tabs.keys())[0]
+                self._activate_tab(next_path)
 
     def _add_block_dialog(self, *_):
         if not self.current_file: return self.toast_cb("❌ No file open")
@@ -1612,7 +2714,6 @@ class BlockEditorView(Gtk.Box):
             self._push_state(); self._render_blocks()
             if self._get_config_cb: memory_record(self._get_config_cb(), str(path.parent), str(path), action="open")
         except Exception as e: self.file_label.set_text(f"❌ Error: {e}")
-        
         # Add to tabs
         self._add_tab(str(path))
 
@@ -1661,56 +2762,76 @@ class DirectoryPickerRow(Adw.ActionRow):
         self.filename = filename
         self.entry = Gtk.Entry(); self.entry.set_text(initial_value); self.entry.set_hexpand(True); self.add_suffix(self.entry)
         btn = Gtk.Button(icon_name="folder-symbolic"); btn.set_tooltip_text("Choose folder"); btn.set_valign(Gtk.Align.CENTER); btn.connect("clicked", self._on_browse); self.add_suffix(btn)
+
     def _on_browse(self, btn):
         Gtk.FileDialog(title="Choose destination folder").select_folder(self.get_root(), None, self._on_folder_selected)
+
     def _on_folder_selected(self, dialog, result):
         try:
             folder = dialog.select_folder_finish(result)
             if folder: self.entry.set_text(str(Path(folder.get_path()) / self.filename))
         except Exception: pass
+
     def get_text(self): return self.entry.get_text()
 
 class SettingsDialog(Adw.PreferencesDialog):
     def __init__(self, parent, config: dict, on_save):
         super().__init__(); self.set_title("Settings"); self.config, self.on_save = dict(config), on_save
         page = Adw.PreferencesPage(); self.add(page)
+        
         grp = Adw.PreferencesGroup(title="🤖 llama.cpp"); page.add(grp); self._rows = {}
         for key, title, placeholder in [("llama_server_path", "llama-server path", "/usr/local/bin/llama-server"), ("llama_model_path", ".gguf model path", "/models/qwen2.5-coder.gguf"), ("llama_host", "Host", "127.0.0.1"), ("llama_port", "Port", "8080")]:
             row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, placeholder))); self._rows[key] = row; grp.add(row)
+        
         grp_ports = Adw.PreferencesGroup(title="🔌 Ports & Servers"); page.add(grp_ports)
         auto_port = Adw.SwitchRow(title="Auto-detect free ports"); auto_port.set_active(config.get("auto_find_free_port", True)); self._rows["auto_find_free_port"] = auto_port; grp_ports.add(auto_port)
         for key, title, default in [("default_port_range_start", "Range start", 8000), ("default_port_range_end", "Range end", 8010)]:
             row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, default))); self._rows[key] = row; grp_ports.add(row)
         gunicorn_row = Adw.EntryRow(title="Gunicorn bind address"); gunicorn_row.set_text(str(config.get("gunicorn_bind", "0.0.0.0:8000"))); gunicorn_row.set_tooltip_text("e.g., 0.0.0.0:8000, 0.0.0.0:80 or 0.0.0.0:443")
         self._rows["gunicorn_bind"] = gunicorn_row; grp_ports.add(gunicorn_row)
+        
         grp2 = Adw.PreferencesGroup(title="🌐 Options"); page.add(grp2)
         browser_switch = Adw.SwitchRow(title="Open browser automatically"); browser_switch.set_active(config.get("open_browser_on_run", True)); self._rows["open_browser_on_run"] = browser_switch; grp2.add(browser_switch)
         theme_row = Adw.ComboRow(title="Theme"); theme_row.set_model(Gtk.StringList.new(["Dark", "Light"])); theme_row.set_selected(0 if config.get("theme", "dark") == "dark" else 1); self._rows["theme"] = theme_row; grp2.add(theme_row)
+        
         grp_paths = Adw.PreferencesGroup(title="📁 File Paths"); page.add(grp_paths)
         log_row = DirectoryPickerRow(title="Log file (.log)", subtitle="Destination folder for logs", initial_value=config.get("log_file_path", DEFAULT_CONFIG["log_file_path"]), filename="studio.log")
         self._rows["log_file_path"] = log_row; grp_paths.add(log_row)
         db_row = DirectoryPickerRow(title="SQLite database (.db)", subtitle="Destination folder for the database", initial_value=config.get("db_path", DEFAULT_CONFIG["db_path"]), filename="gykhamine_studio.db")
         self._rows["db_path"] = db_row; grp_paths.add(db_row)
+
         # === Groupe PostgreSQL ===
         grp_pg = Adw.PreferencesGroup(title="🐘 Base de données (PostgreSQL)")
         page.add(grp_pg)
-        pg_rows = [
-            ("pg_device", "Périphérique de la partition", "/dev/sda3"),
+        
+        # Utilisation d'un sélecteur de fichier pour la partition
+        pg_device_row = DirectoryPickerRow(
+            title="Périphérique de la partition", 
+            subtitle="Sélectionnez /dev/sdX ou un fichier image", 
+            initial_value=config.get("pg_device", ""), 
+            filename="" # On laisse vide car on veut le chemin exact du device
+        )
+        self._rows["pg_device"] = pg_device_row
+        grp_pg.add(pg_device_row)
+
+        pg_other_rows = [
             ("pg_mount_point", "Point de montage", "/var/lib/pgsql/data"),
             ("pg_db_name", "Nom de la base de données", "ma_base"),
             ("pg_db_user", "Nom d'utilisateur PostgreSQL", "mon_user"),
             ("pg_db_password", "Mot de passe PostgreSQL", "mot_de_passe"),
         ]
-        for key, title, placeholder in pg_rows:
+        for key, title, placeholder in pg_other_rows:
             row = Adw.EntryRow(title=title)
             row.set_text(str(config.get(key, placeholder)))
             self._rows[key] = row
             grp_pg.add(row)
+            
         bind_row = Adw.ComboRow(title="Adresse d'écoute (IP)")
         bind_row.set_model(Gtk.StringList.new(["127.0.0.1 (Local uniquement)", "0.0.0.0 (Réseau / Externe)"]))
         bind_row.set_selected(0 if config.get("pg_bind_ip", "127.0.0.1") == "127.0.0.1" else 1)
         self._rows["pg_bind_ip"] = bind_row
         grp_pg.add(bind_row)
+
         # ========================================
         # === Groupe Redis ===
         grp_redis = Adw.PreferencesGroup(title="🔴 Base de données (Redis)")
@@ -1723,6 +2844,7 @@ class SettingsDialog(Adw.PreferencesDialog):
             row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, placeholder))); self._rows[key] = row; grp_redis.add(row)
         persist_row = Adw.SwitchRow(title="Utiliser la persistance (AOF)"); persist_row.set_active(config.get("redis_use_persistence", True)); self._rows["redis_use_persistence"] = persist_row; grp_redis.add(persist_row)
         env_update_row = Adw.SwitchRow(title="Mettre à jour REDIS_URL dans le .env"); env_update_row.set_active(config.get("redis_update_env", False)); env_update_row.set_subtitle("Respecte la gestion manuelle si désactivé"); self._rows["redis_update_env"] = env_update_row; grp_redis.add(env_update_row)
+
         # ========================================
         # === Groupe NFS Serveur ===
         grp_nfs_s = Adw.PreferencesGroup(title="📁 NFS Serveur")
@@ -1733,29 +2855,35 @@ class SettingsDialog(Adw.PreferencesDialog):
         self._rows["nfs_server_mode"] = nfs_s_mode_row; grp_nfs_s.add(nfs_s_mode_row)
         for key, title, placeholder in [("nfs_export_dir", "Dossier à exporter", "/run/media/gykhamine/GY/gy/media"), ("nfs_lan_network", "Réseau autorisé (si mode Réseau)", "192.168.1.0/24")]:
             row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, placeholder))); self._rows[key] = row; grp_nfs_s.add(row)
+
         # ========================================
         # === Groupe NFS Client ===
         grp_nfs_c = Adw.PreferencesGroup(title="💻 NFS Client")
         page.add(grp_nfs_c)
         for key, title, placeholder in [("nfs_client_server_ip", "IP du serveur NFS", "192.168.1.10"), ("nfs_client_export_dir", "Dossier exporté sur le serveur", "/srv/nfs"), ("nfs_client_mount_point", "Point de montage local", str(Path.home() / "nfs_mount"))]:
             row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, placeholder))); self._rows[key] = row; grp_nfs_c.add(row)
+
         # ========================================
         # === Groupe SSH ===
         grp_ssh = Adw.PreferencesGroup(title="🔐 SSH")
         page.add(grp_ssh)
         for key, title, placeholder in [("ssh_server_port", "Port Serveur", "22"), ("ssh_client_host", "Hôte Client", "192.168.1.10"), ("ssh_client_port", "Port Client", "22"), ("ssh_client_user", "Utilisateur Client", "root"), ("ssh_client_key", "Clé Privée", "~/.ssh/id_rsa")]:
             row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, placeholder))); self._rows[key] = row; grp_ssh.add(row)
+
         # ========================================
         # === Groupe Venv ===
         grp_venv = Adw.PreferencesGroup(title="🐍 Python Venv")
         page.add(grp_venv)
         for key, title, placeholder in [("venv_name", "Nom de l'environnement", "venv")]:
             row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, placeholder))); self._rows[key] = row; grp_venv.add(row)
+
         # ========================================
         grp_about = Adw.PreferencesGroup(title="ℹ️ About"); page.add(grp_about)
         version_row = Adw.ActionRow(title="Version", subtitle=f"Gykhamine Studio v{VERSION}"); version_row.set_icon_name("dialog-information-symbolic"); grp_about.add(version_row)
+        
         btn = Gtk.Button(label="💾 Save"); btn.add_css_class("suggested-action"); btn.connect("clicked", self._do_save)
         grp_save = Adw.PreferencesGroup(); page.add(grp_save); grp_save.add(btn)
+
     def _do_save(self, *_):
         for key, row in self._rows.items():
             if isinstance(row, Adw.EntryRow): self.config[key] = row.get_text()
@@ -1770,11 +2898,13 @@ class SettingsDialog(Adw.PreferencesDialog):
                     self.config["redis_ip"] = "127.0.0.1" if row.get_selected() == 0 else "0.0.0.0"
                 elif key == "nfs_server_mode":
                     self.config["nfs_server_mode"] = "local" if row.get_selected() == 0 else "network"
-                elif hasattr(row, "get_text"): self.config[key] = row.get_text()
+            elif hasattr(row, "get_text"): self.config[key] = row.get_text()
+        
         try:
             self.config["default_port_range_start"] = int(self.config.get("default_port_range_start", 8000))
             self.config["default_port_range_end"] = int(self.config.get("default_port_range_end", 8010))
         except: pass
+        
         self.on_save(self.config); self.close()
 
 CSS = """
@@ -1867,8 +2997,10 @@ class GykhamineStudioApp(Adw.Application):
     def _on_activate(self, app):
         provider = Gtk.CssProvider(); provider.load_from_data(CSS.encode())
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        
         self.win = Adw.ApplicationWindow(application=app); self.win.set_title("Gykhamine Studio"); self.win.set_default_size(1400, 850)
         self.toast_overlay = Adw.ToastOverlay(); main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        
         header = Adw.HeaderBar()
         logo_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         if LOGO_PATH.exists():
@@ -1881,37 +3013,49 @@ class GykhamineStudioApp(Adw.Application):
         else: logo_box.append(Gtk.Label(label="GYKHAMINE", css_classes=["heading"]))
         logo_box.append(Gtk.Label(label="GYKHAMINE STUDIO", css_classes=["heading"]))
         header.set_title_widget(logo_box)
+        
         self.btn_toggle_left = Gtk.Button(label="☰"); self.btn_toggle_left.set_tooltip_text("Show/Hide explorer"); self.btn_toggle_left.connect("clicked", self._toggle_left_panel); header.pack_start(self.btn_toggle_left)
         btn_open = Gtk.Button(label="📂 Open"); btn_open.add_css_class("suggested-action"); btn_open.connect("clicked", self._open_project_dialog); header.pack_start(btn_open)
         self.btn_toggle_terminal = Gtk.Button(label="🖥"); self.btn_toggle_terminal.set_tooltip_text("Show/Hide terminal"); self.btn_toggle_terminal.connect("clicked", self._toggle_terminal_panel); header.pack_end(self.btn_toggle_terminal)
         btn_fullscreen = Gtk.Button(label="⛶"); btn_fullscreen.set_tooltip_text("Fullscreen"); btn_fullscreen.connect("clicked", self._toggle_fullscreen); header.pack_end(btn_fullscreen)
         self.btn_toggle_right = Gtk.Button(label="⚙"); self.btn_toggle_right.set_tooltip_text("Show/Hide control panel"); self.btn_toggle_right.connect("clicked", self._toggle_right_panel); header.pack_end(self.btn_toggle_right)
         btn_settings = Gtk.Button(icon_name="preferences-system-symbolic"); btn_settings.set_tooltip_text("Settings"); btn_settings.connect("clicked", self._open_settings); header.pack_end(btn_settings)
+        
         main_box.append(header)
+        
         self.main_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self.main_paned.set_vexpand(True); self.main_paned.set_hexpand(True); self.main_paned.set_shrink_start_child(True); self.main_paned.set_shrink_end_child(False); self.main_paned.set_resize_start_child(True); self.main_paned.set_resize_end_child(True)
         self.file_panel = FilePanel(self._on_file_selected, self._load_project, self._on_file_created, self._on_file_imported)
         self.main_paned.set_start_child(self.file_panel); self.main_paned.set_position(280)
+        
         self.workspace_paned = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
         self.workspace_paned.set_vexpand(True); self.workspace_paned.set_hexpand(True); self.workspace_paned.set_shrink_start_child(False); self.workspace_paned.set_shrink_end_child(False); self.workspace_paned.set_resize_start_child(True); self.workspace_paned.set_resize_end_child(True)
+        
         self.content_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self.content_paned.set_shrink_start_child(False); self.content_paned.set_shrink_end_child(False); self.content_paned.set_resize_start_child(True); self.content_paned.set_resize_end_child(False)
+        
         self.editor_view = BlockEditorView(self._show_toast, self._run_python_file, get_config_cb=lambda: self.config)
         self.content_paned.set_start_child(self.editor_view); self.content_paned.set_position(800)
+        
         self.terminal_panel = TerminalPanel(get_project_root=lambda: self.project_root, get_config=lambda: self.config, show_toast=self._show_toast)
         self.control_panel = ControlPanel(get_project_root=lambda: self.project_root, get_config=lambda: self.config, show_toast=self._show_toast, terminal_panel=self.terminal_panel)
         self.ctrl_scroll = Gtk.ScrolledWindow(); self.ctrl_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC); self.ctrl_scroll.set_hexpand(True); self.ctrl_scroll.set_vexpand(True); self.ctrl_scroll.set_child(self.control_panel)
         self.content_paned.set_end_child(self.ctrl_scroll)
+        
         self.workspace_paned.set_start_child(self.content_paned); self.workspace_paned.set_end_child(self.terminal_panel); self.workspace_paned.set_position(600)
         self.main_paned.set_end_child(self.workspace_paned)
+        
         main_box.append(self.main_paned)
         self.toast_overlay.set_child(main_box); self.win.set_content(self.toast_overlay)
         self._apply_theme()
+        
         self.left_visible, self.right_visible, self.terminal_visible = True, True, True
         self._left_pos, self._right_pos, self._terminal_pos = 280, 800, 600
+        
         last = self.config.get("last_project", "")
         if last and Path(last).exists(): self._load_project(Path(last))
         elif len(sys.argv) > 1 and Path(sys.argv[1]).exists(): self._load_project(Path(sys.argv[1]))
+        
         self.win.present()
 
     def _toggle_fullscreen(self, *_):
