@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════╗
-║           GYKHAMINE STUDIO — v2.5.4                      ║
+║           GYKHAMINE STUDIO — v2.6.1 (Full Stack Integrated)║
 ║     No-code visual editor for Gykhamine capsules         ║
 ║     Developed for the GCI project — Brazzaville, Congo   ║
 ╚══════════════════════════════════════════════════════════╝
-Dependencies : python3-gi, gtk4, libadwaita-1, zipfile
+Dependencies : python3-gi, gtk4, libadwaita-1, zipfile, pandas, openpyxl
 Launch       : python3 gy.py
 """
 import gi
@@ -29,7 +29,7 @@ def set_margins(widget, val):
 #  GLOBAL CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════
 APP_ID   = "org.gykhamine.studio"
-VERSION  = "2.5.4"
+VERSION  = "2.6.1"
 SCRIPT_DIR = Path(__file__).parent.resolve()
 LOGO_PATH  = SCRIPT_DIR / "logo.png"
 DB_PATH    = Path.home() / ".config" / "gykhamine_studio.db"
@@ -48,6 +48,33 @@ DEFAULT_CONFIG = {
     "default_port_range_end": 8010,
     "log_file_path":     str(Path.home() / ".local/share/gykhamine_studio/studio.log"),
     "db_path":           str(Path.home() / ".config" / "gykhamine_studio.db"),
+    
+    # === Configuration PostgreSQL ===
+    "pg_device":         "/dev/sda3",
+    "pg_mount_point":    "/var/lib/pgsql/data",
+    "pg_db_name":        "ma_base",
+    "pg_db_user":        "mon_user",
+    "pg_db_password":    "mot_de_passe",
+    "pg_bind_ip":        "127.0.0.1",
+    
+    # === Configuration Redis ===
+    "redis_mode":        "local",
+    "redis_ip":          "127.0.0.1",
+    "redis_port":        "6379",
+    "redis_data_dir":    str(Path.home() / "redis_data"),
+    "redis_use_persistence": True,
+    "redis_env_path":    "/run/media/gykhamine/GY/Gykhamine/gy/.env",
+    "redis_update_env":  False,
+    
+    # === Configuration NFS Serveur ===
+    "nfs_server_mode":   "local",
+    "nfs_export_dir":    "/run/media/gykhamine/GY/gy/media",
+    "nfs_lan_network":   "192.168.1.0/24",
+    
+    # === Configuration NFS Client ===
+    "nfs_client_server_ip":   "192.168.1.10",
+    "nfs_client_export_dir":  "/srv/nfs",
+    "nfs_client_mount_point": str(Path.home() / "nfs_mount"),
 }
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -146,7 +173,7 @@ def kill_process_on_port(port: int) -> bool:
         result = subprocess.run(f"lsof -ti:{port}", shell=True, capture_output=True, text=True)
         if result.stdout.strip():
             for pid in result.stdout.strip().split('\n'): subprocess.run(f"kill -9 {pid}", shell=True)
-        return True
+            return True
     except Exception: pass
     return False
 
@@ -203,18 +230,12 @@ def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
         raw = "".join(current_lines)
         if raw.strip():
             stripped = raw.strip()
-            if label_override:
-                btype, bname = "separator", label_override
-            elif re.match(r'^(import|from)\s+', stripped):
-                btype, bname = "import", stripped.splitlines()[0][:60]
-            elif re.match(r'^class\s+(\w+)', stripped):
-                btype, bname = "class", re.match(r'^class\s+(\w+)', stripped).group(1)
-            elif re.search(r'\bdef\s+(\w+)\s*\(', stripped):
-                btype, bname = "function", re.search(r'\bdef\s+(\w+)\s*\(', stripped).group(1)
-            elif stripped.startswith("#"):
-                btype, bname = "comment", stripped[:60]
-            else:
-                btype, bname = "other", stripped[:40] if stripped else "bloc"
+            if label_override: btype, bname = "separator", label_override
+            elif re.match(r'^(import|from)\s+', stripped): btype, bname = "import", stripped.splitlines()[0][:60]
+            elif re.match(r'^class\s+(\w+)', stripped): btype, bname = "class", re.match(r'^class\s+(\w+)', stripped).group(1)
+            elif re.search(r'\bdef\s+(\w+)\s*\(', stripped): btype, bname = "function", re.search(r'\bdef\s+(\w+)\s*\(', stripped).group(1)
+            elif stripped.startswith("#"): btype, bname = "comment", stripped[:60]
+            else: btype, bname = "other", stripped[:40] if stripped else "bloc"
             blocks.append({"type": btype, "name": bname, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
         current_lines, current_start = [], i
 
@@ -292,6 +313,7 @@ def _parse_css_blocks(code: str, file_path: str) -> list[dict]:
         raw = "".join(current_lines)
         if raw.strip(): blocks.append({"type": "style_rule", "name": label, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
         current_lines, current_start = [], i
+
     while i < len(lines):
         line = lines[i]; stripped = line.strip()
         if stripped.startswith('@') or (stripped and not stripped.startswith('/') and '{' in stripped and not stripped.startswith('}')):
@@ -309,6 +331,7 @@ def _parse_js_blocks(code: str, file_path: str) -> list[dict]:
         raw = "".join(current_lines)
         if raw.strip(): blocks.append({"type": "script_block", "name": label, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
         current_lines, current_start = [], i
+
     while i < len(lines):
         line = lines[i]; stripped = line.strip()
         if re.match(r'^(class|function|async\s+function|const|let|var|export|import)\s+', stripped) or re.match(r'^//\s*#{4,}', stripped):
@@ -325,6 +348,7 @@ def _parse_c_blocks(code: str, file_path: str) -> list[dict]:
         raw = "".join(current_lines)
         if raw.strip(): blocks.append({"type": "c_block", "name": label, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
         current_lines, current_start = [], i
+
     while i < len(lines):
         line = lines[i]; stripped = line.strip()
         if re.match(r'^(class|struct|enum|namespace)\s+\w+', stripped) or re.match(r'^(void|int|char|float|double|bool|auto|unsigned|signed|long|short)\s+\w+\s*\(', stripped) or re.match(r'^#\s*(include|define|pragma|ifdef|ifndef|endif)', stripped) or re.match(r'^//\s*#{4,}', stripped):
@@ -388,26 +412,16 @@ class BlockCard(Gtk.Box):
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         set_margins(content, 12)
         dialog.set_child(content)
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_vexpand(True); scroll.set_hexpand(True)
-        textview = Gtk.TextView()
-        textview.set_monospace(True); textview.set_editable(True); textview.set_wrap_mode(Gtk.WrapMode.WORD)
+        scroll = Gtk.ScrolledWindow(); scroll.set_vexpand(True); scroll.set_hexpand(True)
+        textview = Gtk.TextView(); textview.set_monospace(True); textview.set_editable(True); textview.set_wrap_mode(Gtk.WrapMode.WORD)
         textview.add_css_class("code-editor")
         textview.get_buffer().set_text(self.block["code"])
         apply_syntax_highlighting(textview, self.lang)
-        scroll.set_child(textview)
-        content.append(scroll)
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        btn_box.set_halign(Gtk.Align.END)
-        btn1 = Gtk.Button(label="📋 Copy")
-        btn1.connect("clicked", lambda *_: self._do_copy())
-        btn_box.append(btn1)
-        btn2 = Gtk.Button(label="Close")
-        btn2.connect("clicked", lambda *_: dialog.destroy())
-        btn_box.append(btn2)
-        btn3 = Gtk.Button(label="💾 Save and Close", css_classes=["suggested-action"])
-        btn3.connect("clicked", lambda *_: self._save_from_popup(textview, dialog))
-        btn_box.append(btn3)
+        scroll.set_child(textview); content.append(scroll)
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6); btn_box.set_halign(Gtk.Align.END)
+        btn1 = Gtk.Button(label="📋 Copy"); btn1.connect("clicked", lambda *_: self._do_copy()); btn_box.append(btn1)
+        btn2 = Gtk.Button(label="Close"); btn2.connect("clicked", lambda *_: dialog.destroy()); btn_box.append(btn2)
+        btn3 = Gtk.Button(label="💾 Save and Close", css_classes=["suggested-action"]); btn3.connect("clicked", lambda *_: self._save_from_popup(textview, dialog)); btn_box.append(btn3)
         content.append(btn_box)
         dialog.present()
 
@@ -433,54 +447,29 @@ class FilePanel(Gtk.Box):
         self.tree_store = Gtk.TreeStore(str, str, bool)
         self.show_hidden = False
         
-        lbl = Gtk.Label(label="📁 Projet")
-        lbl.add_css_class("panel-title")
-        lbl.set_xalign(0)
-        lbl.set_margin_start(12)
-        lbl.set_margin_top(10)
-        lbl.set_margin_bottom(6)
-        self.append(lbl)
-        self.append(Gtk.Separator())
+        lbl = Gtk.Label(label="📁 Projet"); lbl.add_css_class("panel-title"); lbl.set_xalign(0); lbl.set_margin_start(12); lbl.set_margin_top(10); lbl.set_margin_bottom(6)
+        self.append(lbl); self.append(Gtk.Separator())
         
-        self.stack = Gtk.Stack()
-        self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
-        
-        scroll_files = Gtk.ScrolledWindow()
-        scroll_files.set_vexpand(True)
-        scroll_files.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self.tree_view = Gtk.TreeView(model=self.tree_store)
-        self.tree_view.set_headers_visible(False)
-        self.tree_view.add_css_class("file-tree-view")
+        self.stack = Gtk.Stack(); self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
+        scroll_files = Gtk.ScrolledWindow(); scroll_files.set_vexpand(True); scroll_files.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.tree_view = Gtk.TreeView(model=self.tree_store); self.tree_view.set_headers_visible(False); self.tree_view.add_css_class("file-tree-view")
         renderer = Gtk.CellRendererText()
         column = Gtk.TreeViewColumn("Fichiers", renderer, text=0)
         column.set_cell_data_func(renderer, self._on_tree_cell_data)
         self.tree_view.append_column(column)
         self.tree_view.connect("row-activated", self._on_row_activated)
-        
-        # Right-click gesture for context menu (VS Code style)
-        self.gesture_click = Gtk.GestureClick.new()
-        self.gesture_click.set_button(Gdk.BUTTON_SECONDARY)
-        self.gesture_click.connect("pressed", self._on_right_click)
+        self.gesture_click = Gtk.GestureClick.new(); self.gesture_click.set_button(Gdk.BUTTON_SECONDARY); self.gesture_click.connect("pressed", self._on_right_click)
         self.tree_view.add_controller(self.gesture_click)
-        
         scroll_files.set_child(self.tree_view)
         
-        scroll_projs = Gtk.ScrolledWindow()
-        scroll_projs.set_vexpand(True)
-        scroll_projs.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self.recent_list = Gtk.ListBox()
-        self.recent_list.add_css_class("file-list")
-        self.recent_list.connect("row-activated", self._on_project_selected)
+        scroll_projs = Gtk.ScrolledWindow(); scroll_projs.set_vexpand(True); scroll_projs.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.recent_list = Gtk.ListBox(); self.recent_list.add_css_class("file-list"); self.recent_list.connect("row-activated", self._on_project_selected)
         scroll_projs.set_child(self.recent_list)
         
-        self.stack.add_named(scroll_files, "files")
-        self.stack.add_named(scroll_projs, "recent")
+        self.stack.add_named(scroll_files, "files"); self.stack.add_named(scroll_projs, "recent")
         self.append(self.stack)
         
-        nav_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        set_margins(nav_bar, 6)
-        nav_bar.set_margin_start(8)
-        nav_bar.set_margin_end(8)
+        nav_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4); set_margins(nav_bar, 6); nav_bar.set_margin_start(8); nav_bar.set_margin_end(8)
         btn_files = Gtk.Button(label="📄"); btn_files.set_tooltip_text("Fichiers"); btn_files.add_css_class("flat"); btn_files.set_hexpand(True); btn_files.connect("clicked", lambda *_: self.stack.set_visible_child_name("files"))
         btn_recent = Gtk.Button(label="🕒"); btn_recent.set_tooltip_text("Récents"); btn_recent.add_css_class("flat"); btn_recent.set_hexpand(True); btn_recent.connect("clicked", lambda *_: self.stack.set_visible_child_name("recent"))
         btn_new = Gtk.Button(label="➕"); btn_new.set_tooltip_text("Nouveau fichier"); btn_new.add_css_class("flat"); btn_new.set_hexpand(True); btn_new.connect("clicked", self._create_new_file)
@@ -491,23 +480,17 @@ class FilePanel(Gtk.Box):
 
     def _toggle_hidden_files(self, *_):
         self.show_hidden = not self.show_hidden
-        if self.show_hidden:
-            self.btn_hidden.set_label("👁"); self.btn_hidden.set_tooltip_text("Masquer les fichiers cachés")
-        else:
-            self.btn_hidden.set_label("🙈"); self.btn_hidden.set_tooltip_text("Afficher les fichiers cachés")
+        if self.show_hidden: self.btn_hidden.set_label("👁"); self.btn_hidden.set_tooltip_text("Masquer les fichiers cachés")
+        else: self.btn_hidden.set_label("🙈"); self.btn_hidden.set_tooltip_text("Afficher les fichiers cachés")
         if self.project_root: self.load_project(self.project_root, load_config())
 
     def _on_tree_cell_data(self, column, cell, model, tree_iter, data):
-        name = model.get_value(tree_iter, 0)
-        is_folder = model.get_value(tree_iter, 2)
+        name = model.get_value(tree_iter, 0); is_folder = model.get_value(tree_iter, 2)
         if is_folder:
-            cell.set_property("weight", Pango.Weight.BOLD)
-            cell.set_property("text", f"📁 {name}")
-            cell.set_property("foreground", "#888888" if name.startswith('.') else "#e0e0e0")
+            cell.set_property("weight", Pango.Weight.BOLD); cell.set_property("text", f"📁 {name}"); cell.set_property("foreground", "#888888" if name.startswith('.') else "#e0e0e0")
         else:
             cell.set_property("weight", Pango.Weight.NORMAL)
-            ext = Path(name).suffix.lower() if '.' in name else ""
-            icon, color = "📄", "#888888" if name.startswith('.') else "#e0e0e0"
+            ext = Path(name).suffix.lower() if '.' in name else ""; icon, color = "📄", "#888888" if name.startswith('.') else "#e0e0e0"
             if name in ("settings.py", "manage.py"): icon = "⚙"
             elif name == "views.py": icon = "👁"
             elif name == "models.py": icon = "🗄"
@@ -516,14 +499,10 @@ class FilePanel(Gtk.Box):
             elif ext in ('.c', '.cpp', '.h'): icon = "⚙️"
             elif ext == '.sh': icon = "📜"
             elif ext in ('.html', '.jinja', '.jinja2'): icon = "🌐"
-            cell.set_property("text", f"  {icon} {name}")
-            cell.set_property("foreground", color)
+            cell.set_property("text", f"  {icon} {name}"); cell.set_property("foreground", color)
 
     def _on_row_activated(self, treeview, path, column):
-        model = treeview.get_model()
-        tree_iter = model.get_iter(path)
-        full_path = model.get_value(tree_iter, 1)
-        is_folder = model.get_value(tree_iter, 2)
+        model = treeview.get_model(); tree_iter = model.get_iter(path); full_path = model.get_value(tree_iter, 1); is_folder = model.get_value(tree_iter, 2)
         if is_folder:
             if treeview.row_expanded(path): treeview.collapse_row(path)
             else: treeview.expand_row(path, False)
@@ -531,10 +510,7 @@ class FilePanel(Gtk.Box):
             if Path(full_path).exists(): self.on_file_select(Path(full_path))
 
     def load_project(self, root: Path, config: dict):
-        self.project_root = root
-        self.tree_store.clear()
-        self._populate_tree(root, None)
-        self._load_recent_projects(config)
+        self.project_root = root; self.tree_store.clear(); self._populate_tree(root, None); self._load_recent_projects(config)
 
     def _populate_tree(self, directory: Path, parent_iter):
         try:
@@ -555,37 +531,26 @@ class FilePanel(Gtk.Box):
         for proj_path in get_recent_projects(config):
             path = Path(proj_path)
             if path.exists():
-                row = Gtk.ListBoxRow()
-                row._project_path = path
-                lbl = Gtk.Label(label=f"  📂 {path.name}\n{path.parent}")
-                lbl.set_xalign(0); lbl.set_margin_start(16); lbl.set_margin_top(6); lbl.set_margin_bottom(6)
+                row = Gtk.ListBoxRow(); row._project_path = path
+                lbl = Gtk.Label(label=f"  📂 {path.name}\n{path.parent}"); lbl.set_xalign(0); lbl.set_margin_start(16); lbl.set_margin_top(6); lbl.set_margin_bottom(6)
                 lbl.set_ellipsize(Pango.EllipsizeMode.END); lbl.set_max_width_chars(35); lbl.add_css_class("file-item")
-                row.set_child(lbl)
-                self.recent_list.append(row)
+                row.set_child(lbl); self.recent_list.append(row)
 
     def _on_project_selected(self, lb, row):
         if hasattr(row, "_project_path"): self.on_project_select(row._project_path)
 
     def _create_new_file(self, *_):
         if not self.project_root: return self._show_error("Aucun projet ouvert")
-        dialog = Gtk.Dialog(title="Nouveau fichier", transient_for=self.get_root())
-        dialog.set_default_size(400, 250)
-        content = dialog.get_content_area()
-        content.set_spacing(8); set_margins(content, 12)
+        dialog = Gtk.Dialog(title="Nouveau fichier", transient_for=self.get_root()); dialog.set_default_size(400, 250)
+        content = dialog.get_content_area(); content.set_spacing(8); set_margins(content, 12)
         content.append(Gtk.Label(label="Nom du fichier (avec extension):", xalign=0))
-        entry = Gtk.Entry(); entry.set_placeholder_text("ex: style.css, script.js, main.c")
-        content.append(entry)
+        entry = Gtk.Entry(); entry.set_placeholder_text("ex: style.css, script.js, main.c"); content.append(entry)
         content.append(Gtk.Label(label="Contenu initial (optionnel):", xalign=0, margin_top=8))
-        text_buf = Gtk.TextBuffer()
-        text_view = Gtk.TextView.new_with_buffer(text_buf)
-        text_view.set_size_request(-1, 100)
-        scroll = Gtk.ScrolledWindow(); scroll.set_child(text_view)
-        content.append(scroll)
+        text_buf = Gtk.TextBuffer(); text_view = Gtk.TextView.new_with_buffer(text_buf); text_view.set_size_request(-1, 100)
+        scroll = Gtk.ScrolledWindow(); scroll.set_child(text_view); content.append(scroll)
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        btn_cancel = Gtk.Button(label="Annuler")
-        btn_create = Gtk.Button(label="✅ Créer"); btn_create.add_css_class("suggested-action")
-        btn_box.append(btn_cancel); btn_box.append(btn_create)
-        content.append(btn_box)
+        btn_cancel = Gtk.Button(label="Annuler"); btn_create = Gtk.Button(label="✅ Créer"); btn_create.add_css_class("suggested-action")
+        btn_box.append(btn_cancel); btn_box.append(btn_create); content.append(btn_box)
         def on_create(*_):
             filename = entry.get_text().strip()
             if not filename: return self._show_error("Nom requis")
@@ -593,12 +558,8 @@ class FilePanel(Gtk.Box):
             if filepath.exists(): return self._show_error(f"{filename} existe déjà")
             text = text_buf.get_text(text_buf.get_start_iter(), text_buf.get_end_iter(), True) or f"# {filename}\n# Créé avec Gykhamine Studio\n"
             filepath.write_text(text, encoding='utf-8')
-            self.on_file_created(filepath)
-            self.load_project(self.project_root, load_config())
-            dialog.destroy()
-        btn_create.connect("clicked", on_create)
-        btn_cancel.connect("clicked", lambda *_: dialog.destroy())
-        dialog.present()
+            self.on_file_created(filepath); self.load_project(self.project_root, load_config()); dialog.destroy()
+        btn_create.connect("clicked", on_create); btn_cancel.connect("clicked", lambda *_: dialog.destroy()); dialog.present()
 
     def _import_file(self, *_):
         if not self.project_root: return self._show_error("Aucun projet ouvert")
@@ -608,173 +569,93 @@ class FilePanel(Gtk.Box):
         try:
             file = dialog.open_finish(result)
             if file:
-                src = Path(file.get_path())
-                dst = self.project_root / src.name
+                src = Path(file.get_path()); dst = self.project_root / src.name
                 if dst.exists() and Gtk.MessageDialog(transient_for=self.get_root(), flags=0, message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.YES_NO, text="Fichier existant", secondary_text=f"{dst.name} existe. Écraser ?").run() != Gtk.ResponseType.YES:
                     return
-                shutil.copy2(src, dst)
-                self.on_file_imported(dst)
-                self.load_project(self.project_root, load_config())
+                shutil.copy2(src, dst); self.on_file_imported(dst); self.load_project(self.project_root, load_config())
         except Exception as e: self._show_error(f"Erreur: {e}")
 
     def _show_error(self, msg: str):
         root = self.get_root()
-        if root:
-            overlay = root.get_child()
-            if hasattr(overlay, "add_toast"):
-                overlay.add_toast(Adw.Toast(title=f"❌ {msg}", timeout=3))
+        if root and hasattr(root.get_child(), "add_toast"): root.get_child().add_toast(Adw.Toast(title=f"❌ {msg}", timeout=3))
 
     def _show_toast(self, msg: str):
         root = self.get_root()
-        if root:
-            overlay = root.get_child()
-            if hasattr(overlay, "add_toast"):
-                overlay.add_toast(Adw.Toast(title=msg, timeout=3))
+        if root and hasattr(root.get_child(), "add_toast"): root.get_child().add_toast(Adw.Toast(title=msg, timeout=3))
 
     def _on_right_click(self, gesture, n_press, x, y):
         result = self.tree_view.get_path_at_pos(int(x), int(y))
-        if result is None:
-            return
-        path, column, cell_x, cell_y = result
-        self.tree_view.set_cursor(path)
-        model = self.tree_view.get_model()
-        tree_iter = model.get_iter(path)
-        name = model.get_value(tree_iter, 0)
-        full_path = model.get_value(tree_iter, 1)
-        is_folder = model.get_value(tree_iter, 2)
+        if result is None: return
+        path, column, cell_x, cell_y = result; self.tree_view.set_cursor(path)
+        model = self.tree_view.get_model(); tree_iter = model.get_iter(path)
+        name = model.get_value(tree_iter, 0); full_path = model.get_value(tree_iter, 1); is_folder = model.get_value(tree_iter, 2)
         self._show_context_menu(int(x), int(y), full_path, name, is_folder)
 
     def _show_context_menu(self, x, y, full_path, name, is_folder):
-        popover = Gtk.Popover()
-        popover.set_parent(self.tree_view)
-        popover.set_has_arrow(False)
-        
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        set_margins(box, 6)
-        
-        btn_rename = Gtk.Button(label="✏️ Renommer")
-        btn_rename.set_halign(Gtk.Align.FILL)
-        btn_rename.add_css_class("flat")
-        btn_rename.connect("clicked", lambda *_: self._rename_item(full_path, name, is_folder, popover))
-        
-        btn_delete = Gtk.Button(label="🗑 Supprimer")
-        btn_delete.set_halign(Gtk.Align.FILL)
-        btn_delete.add_css_class("flat")
-        btn_delete.add_css_class("destructive-action")
-        btn_delete.connect("clicked", lambda *_: self._delete_item(full_path, name, is_folder, popover))
-        
-        box.append(btn_rename)
-        box.append(btn_delete)
-        popover.set_child(box)
-        
-        rect = Gdk.Rectangle()
-        rect.x = x
-        rect.y = y
-        rect.width = 1
-        rect.height = 1
-        popover.set_pointing_to(rect)
-        popover.popup()
+        popover = Gtk.Popover(); popover.set_parent(self.tree_view); popover.set_has_arrow(False)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4); set_margins(box, 6)
+        btn_rename = Gtk.Button(label="✏️ Renommer"); btn_rename.set_halign(Gtk.Align.FILL); btn_rename.add_css_class("flat"); btn_rename.connect("clicked", lambda *_: self._rename_item(full_path, name, is_folder, popover))
+        btn_delete = Gtk.Button(label="🗑 Supprimer"); btn_delete.set_halign(Gtk.Align.FILL); btn_delete.add_css_class("flat"); btn_delete.add_css_class("destructive-action"); btn_delete.connect("clicked", lambda *_: self._delete_item(full_path, name, is_folder, popover))
+        box.append(btn_rename); box.append(btn_delete); popover.set_child(box)
+        rect = Gdk.Rectangle(); rect.x = x; rect.y = y; rect.width = 1; rect.height = 1; popover.set_pointing_to(rect); popover.popup()
 
     def _rename_item(self, full_path, old_name, is_folder, popover):
         popover.popdown()
-        dialog = Gtk.Dialog(title="Renommer", transient_for=self.get_root())
-        dialog.set_default_size(350, 150)
-        content = dialog.get_content_area()
-        content.set_spacing(8)
-        set_margins(content, 12)
-        
+        dialog = Gtk.Dialog(title="Renommer", transient_for=self.get_root()); dialog.set_default_size(350, 150)
+        content = dialog.get_content_area(); content.set_spacing(8); set_margins(content, 12)
         content.append(Gtk.Label(label=f"Nouveau nom pour '{old_name}':", xalign=0))
-        entry = Gtk.Entry()
-        entry.set_text(old_name)
-        entry.set_activates_default(True)
-        content.append(entry)
-        
+        entry = Gtk.Entry(); entry.set_text(old_name); entry.set_activates_default(True); content.append(entry)
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        btn_cancel = Gtk.Button(label="Annuler")
-        btn_rename = Gtk.Button(label="✅ Renommer")
-        btn_rename.add_css_class("suggested-action")
-        btn_box.append(btn_cancel)
-        btn_box.append(btn_rename)
-        content.append(btn_box)
-        
+        btn_cancel = Gtk.Button(label="Annuler"); btn_rename = Gtk.Button(label="✅ Renommer"); btn_rename.add_css_class("suggested-action")
+        btn_box.append(btn_cancel); btn_box.append(btn_rename); content.append(btn_box)
         def on_rename(*_):
             new_name = entry.get_text().strip()
-            if not new_name or new_name == old_name:
-                dialog.destroy()
-                return
-            if "/" in new_name or "\\" in new_name:
-                self._show_error("Le nom ne peut pas contenir '/' ou '\\'")
-                return
+            if not new_name or new_name == old_name: dialog.destroy(); return
+            if "/" in new_name or "\\" in new_name: self._show_error("Le nom ne peut pas contenir '/' ou '\\'"); return
             new_path = Path(full_path).parent / new_name
-            if new_path.exists():
-                self._show_error(f"'{new_name}' existe déjà")
-                return
+            if new_path.exists(): self._show_error(f"'{new_name}' existe déjà"); return
             try:
-                Path(full_path).rename(new_path)
-                self.load_project(self.project_root, load_config())
-                self._show_toast(f"✅ Renommé en '{new_name}'")
-            except Exception as e:
-                self._show_error(f"Erreur: {e}")
+                Path(full_path).rename(new_path); self.load_project(self.project_root, load_config()); self._show_toast(f"✅ Renommé en '{new_name}'")
+            except Exception as e: self._show_error(f"Erreur: {e}")
             dialog.destroy()
-            
-        btn_rename.connect("clicked", on_rename)
-        btn_cancel.connect("clicked", lambda *_: dialog.destroy())
-        dialog.present()
+        btn_rename.connect("clicked", on_rename); btn_cancel.connect("clicked", lambda *_: dialog.destroy()); dialog.present()
 
     def _delete_item(self, full_path, name, is_folder, popover):
         popover.popdown()
-        dialog = Gtk.Dialog(title="Confirmer la suppression", transient_for=self.get_root())
-        dialog.set_default_size(350, 150)
-        content = dialog.get_content_area()
-        content.set_spacing(8)
-        set_margins(content, 12)
-        
+        dialog = Gtk.Dialog(title="Confirmer la suppression", transient_for=self.get_root()); dialog.set_default_size(350, 150)
+        content = dialog.get_content_area(); content.set_spacing(8); set_margins(content, 12)
         content.append(Gtk.Label(label=f"Voulez-vous vraiment supprimer '{name}' ?", xalign=0, margin_bottom=8))
         content.append(Gtk.Label(label="Cette action est irréversible.", xalign=0, css_classes=["dim-label"]))
-        
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        btn_cancel = Gtk.Button(label="Annuler")
-        btn_delete = Gtk.Button(label="🗑 Supprimer")
-        btn_delete.add_css_class("destructive-action")
-        btn_box.append(btn_cancel)
-        btn_box.append(btn_delete)
-        content.append(btn_box)
-        
+        btn_cancel = Gtk.Button(label="Annuler"); btn_delete = Gtk.Button(label="🗑 Supprimer"); btn_delete.add_css_class("destructive-action")
+        btn_box.append(btn_cancel); btn_box.append(btn_delete); content.append(btn_box)
         def on_delete(*_):
             try:
                 path = Path(full_path)
-                if path.is_dir():
-                    shutil.rmtree(path)
-                else:
-                    path.unlink()
-                self.load_project(self.project_root, load_config())
-                self._show_toast(f"🗑 Supprimé: {name}")
-            except Exception as e:
-                self._show_error(f"Erreur: {e}")
+                if path.is_dir(): shutil.rmtree(path)
+                else: path.unlink()
+                self.load_project(self.project_root, load_config()); self._show_toast(f"🗑 Supprimé: {name}")
+            except Exception as e: self._show_error(f"Erreur: {e}")
             dialog.destroy()
-            
-        btn_delete.connect("clicked", on_delete)
-        btn_cancel.connect("clicked", lambda *_: dialog.destroy())
-        dialog.present()
+        btn_delete.connect("clicked", on_delete); btn_cancel.connect("clicked", lambda *_: dialog.destroy()); dialog.present()
 
 class TerminalPanel(Gtk.Box):
     def __init__(self, get_project_root, get_config, show_toast):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.get_project_root, self.get_config, self.show_toast = get_project_root, get_config, show_toast
-        self.add_css_class("terminal-panel")
-        self._build()
+        self.add_css_class("terminal-panel"); self._build()
 
     def _build(self):
-        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        header.set_margin_start(8); header.set_margin_end(8); header.set_margin_top(4); header.set_margin_bottom(4)
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8); header.set_margin_start(8); header.set_margin_end(8); header.set_margin_top(4); header.set_margin_bottom(4)
         header.append(Gtk.Label(label="🖥 Terminal", css_classes=["terminal-title"]))
         spacer = Gtk.Box(); spacer.set_hexpand(True); header.append(spacer)
         btn_clear = Gtk.Button(label="🗑 Clear"); btn_clear.add_css_class("ctrl-btn-small"); btn_clear.connect("clicked", lambda *_: self.log_view.get_buffer().set_text(""))
-        header.append(btn_clear)
-        self.append(header); self.append(Gtk.Separator())
+        header.append(btn_clear); self.append(header); self.append(Gtk.Separator())
+        
         self.log_view = Gtk.TextView(); self.log_view.set_editable(False); self.log_view.set_monospace(True); self.log_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR); self.log_view.set_cursor_visible(False); self.log_view.add_css_class("log-view")
         log_scroll = Gtk.ScrolledWindow(); log_scroll.set_hexpand(True); log_scroll.set_vexpand(True); log_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC); log_scroll.set_child(self.log_view)
         self.append(log_scroll)
+        
         term_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6); term_box.set_margin_top(4); term_box.set_margin_bottom(4); term_box.set_margin_start(8); term_box.set_margin_end(8)
         term_box.append(Gtk.Label(label="➜", css_classes=["terminal-prompt"]))
         self.cmd_entry = Gtk.Entry(); self.cmd_entry.set_placeholder_text("Enter a command..."); self.cmd_entry.set_hexpand(True); self.cmd_entry.add_css_class("terminal-input"); self.cmd_entry.connect("activate", self._run_custom_command)
@@ -818,7 +699,7 @@ class ControlPanel(Gtk.Box):
     def _build(self):
         self.session_label = Gtk.Label(label="No project loaded"); self.session_label.add_css_class("control-section-title"); self.session_label.set_xalign(0); self.append(self.session_label)
         port_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6); port_box.set_margin_bottom(8)
-        for label, cb in [("🔍 Check", self._check_ports), ("🔫 Kill port", self._kill_port_dialog)]:
+        for label, cb in [("🔍 Check", self._check_ports), ("🔫 Kill port", self._kill_port_dialog), ("🔓 UFW Allow", self._ufw_allow_dialog)]:
             btn = Gtk.Button(label=label); btn.add_css_class("ctrl-btn-small"); btn.connect("clicked", cb); port_box.append(btn)
         self.append(port_box)
         
@@ -831,25 +712,49 @@ class ControlPanel(Gtk.Box):
         sep = Gtk.Separator(); sep.set_margin_top(8); sep.set_margin_bottom(4); self.append(sep)
         lbl2 = Gtk.Label(label="🗄 Django Commands (manage.py)"); lbl2.add_css_class("control-section-title"); lbl2.set_xalign(0); self.append(lbl2)
         grid = Gtk.Grid(); grid.set_column_spacing(6); grid.set_row_spacing(6)
-        commands = [
-            ("📐 makemigrations", "makemigrations"), 
-            ("⬆ migrate", "migrate"), 
-            ("👤 superuser", "createsuperuser"), 
-            ("🐚 shell", "shell"), 
-            ("🗄 dbshell", "dbshell"), 
-            ("📦 collectstatic", "collectstatic"), 
-            ("✅ check", "check"), 
-            ("📜 showmigrations", "showmigrations"), 
-            ("🧹 flush", "flush")
-        ]
+        commands = [("📐 makemigrations", "makemigrations"), ("⬆ migrate", "migrate"), ("👤 superuser", "createsuperuser"), ("🐚 shell", "shell"), ("🗄 dbshell", "dbshell"), ("📦 collectstatic", "collectstatic"), ("✅ check", "check"), ("📜 showmigrations", "showmigrations"), ("🧹 flush", "flush")]
         for idx, (label, cmd) in enumerate(commands):
             btn = Gtk.Button(label=label); btn.add_css_class("ctrl-btn")
-            if cmd == "createsuperuser":
-                btn.connect("clicked", lambda *_: self._show_createsuperuser_dialog())
-            else:
-                btn.connect("clicked", lambda _, c=cmd: self._run_manage_command(c))
+            if cmd == "createsuperuser": btn.connect("clicked", lambda *_: self._show_createsuperuser_dialog())
+            else: btn.connect("clicked", lambda _, c=cmd: self._run_manage_command(c))
             grid.attach(btn, idx % 3, idx // 3, 1, 1)
         self.append(grid)
+        
+        sep_db = Gtk.Separator(); sep_db.set_margin_top(8); sep_db.set_margin_bottom(4); self.append(sep_db)
+        lbl_db = Gtk.Label(label="🗄 Base de données"); lbl_db.add_css_class("control-section-title"); lbl_db.set_xalign(0); self.append(lbl_db)
+        btn_db_stats = Gtk.Button(label="📊 Visualiser les Tables et Données")
+        btn_db_stats.add_css_class("ctrl-btn"); btn_db_stats.set_hexpand(True); btn_db_stats.set_tooltip_text("Afficher un tableau avec les colonnes, clés et les données réelles (max 100 lignes)")
+        btn_db_stats.connect("clicked", self._show_db_stats)
+        self.append(btn_db_stats)
+        
+        # === GESTION POSTGRESQL ===
+        sep_pg = Gtk.Separator(); sep_pg.set_margin_top(8); sep_pg.set_margin_bottom(4); self.append(sep_pg)
+        lbl_pg = Gtk.Label(label="🐘 Gestion PostgreSQL"); lbl_pg.add_css_class("control-section-title"); lbl_pg.set_xalign(0); self.append(lbl_pg)
+        pg_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        btn_init = Gtk.Button(label="🔧 1. Initialiser (initdb & mount)"); btn_init.add_css_class("ctrl-btn"); btn_init.set_hexpand(True); btn_init.connect("clicked", self._run_pg_initdb); pg_box.append(btn_init)
+        btn_create = Gtk.Button(label="➕ 2. Créer Base & Utilisateur"); btn_create.add_css_class("ctrl-btn"); btn_create.set_hexpand(True); btn_create.connect("clicked", self._run_pg_creatdb); pg_box.append(btn_create)
+        btn_start = Gtk.Button(label="🚀 3. Démarrer & Configurer IP"); btn_start.add_css_class("ctrl-btn"); btn_start.set_hexpand(True); btn_start.connect("clicked", self._run_pg_rundb); pg_box.append(btn_start)
+        btn_stop = Gtk.Button(label="🛑 4. Arrêter la Base de données"); btn_stop.add_css_class("ctrl-btn-warn"); btn_stop.set_hexpand(True); btn_stop.connect("clicked", self._run_pg_stopdb); pg_box.append(btn_stop)
+        self.append(pg_box)
+        # ============================================
+
+        # === GESTION REDIS ===
+        sep_redis = Gtk.Separator(); sep_redis.set_margin_top(8); sep_redis.set_margin_bottom(4); self.append(sep_redis)
+        lbl_redis = Gtk.Label(label="🔴 Gestion Redis"); lbl_redis.add_css_class("control-section-title"); lbl_redis.set_xalign(0); self.append(lbl_redis)
+        self._add_custom_service_row("redis", "▶ Démarrer Redis", self._run_redis_start, self._run_redis_stop)
+        # ============================================
+
+        # === GESTION NFS SERVEUR ===
+        sep_nfs_s = Gtk.Separator(); sep_nfs_s.set_margin_top(8); sep_nfs_s.set_margin_bottom(4); self.append(sep_nfs_s)
+        lbl_nfs_s = Gtk.Label(label="📁 NFS Serveur"); lbl_nfs_s.add_css_class("control-section-title"); lbl_nfs_s.set_xalign(0); self.append(lbl_nfs_s)
+        self._add_custom_service_row("nfs_server", "▶ Démarrer Serveur", self._run_nfs_server_start, self._run_nfs_server_stop)
+        # ============================================
+
+        # === GESTION NFS CLIENT ===
+        sep_nfs_c = Gtk.Separator(); sep_nfs_c.set_margin_top(8); sep_nfs_c.set_margin_bottom(4); self.append(sep_nfs_c)
+        lbl_nfs_c = Gtk.Label(label="💻 NFS Client"); lbl_nfs_c.add_css_class("control-section-title"); lbl_nfs_c.set_xalign(0); self.append(lbl_nfs_c)
+        self._add_custom_service_row("nfs_client", "📥 Monter le partage", self._run_nfs_client_mount, self._run_nfs_client_umount)
+        # ============================================
         
         sep2 = Gtk.Separator(); sep2.set_margin_top(8); sep2.set_margin_bottom(4); self.append(sep2)
         lbl3 = Gtk.Label(label="💊 Gykhamine Capsule"); lbl3.add_css_class("control-section-title"); lbl3.set_xalign(0); self.append(lbl3)
@@ -881,6 +786,15 @@ class ControlPanel(Gtk.Box):
         btn_stop = Gtk.Button(label="⏹"); btn_stop.add_css_class("ctrl-btn-stop"); btn_stop.connect("clicked", stop_cb)
         row.append(dot); row.append(btn_start); row.append(btn_stop); self.append(row)
 
+    def _add_custom_service_row(self, name, label, start_cb, stop_cb):
+        """Variante pour les services système (Redis/NFS) qui ne sont pas gérés par subprocess.Popen direct"""
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self._status_dots = getattr(self, "_status_dots", {})
+        dot = Gtk.Label(label="⬤"); dot.add_css_class("status-dot-off"); self._status_dots[name] = dot
+        btn_start = Gtk.Button(label=label); btn_start.add_css_class("ctrl-btn-start"); btn_start.set_hexpand(True); btn_start.connect("clicked", start_cb)
+        btn_stop = Gtk.Button(label="⏹ Arrêter"); btn_stop.add_css_class("ctrl-btn-stop"); btn_stop.set_hexpand(True); btn_stop.connect("clicked", stop_cb)
+        row.append(dot); row.append(btn_start); row.append(btn_stop); self.append(row)
+
     def _set_dot(self, name, running: bool):
         dot = self._status_dots.get(name)
         if dot:
@@ -897,15 +811,12 @@ class ControlPanel(Gtk.Box):
     def _run_cmd(self, cmd: list, cwd=None, name=None, shell=False, extra_env=None):
         def _thread():
             try:
-                env = os.environ.copy()
-                env["PYTHONUNBUFFERED"] = "1"; env["PYTHONDONTWRITEBYTECODE"] = "1"; env["DJANGO_COLORS"] = "nocolor"
+                env = os.environ.copy(); env["PYTHONUNBUFFERED"] = "1"; env["PYTHONDONTWRITEBYTECODE"] = "1"; env["DJANGO_COLORS"] = "nocolor"
                 if extra_env: env.update(extra_env)
-                
                 proc = subprocess.Popen(cmd, cwd=cwd, shell=shell, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True, bufsize=0, env=env)
                 if name: self.processes[name] = proc
                 GLib.idle_add(self._set_dot, name, True)
                 if not shell: GLib.idle_add(self.terminal._log, f"▶ {' '.join(str(c) for c in cmd)}")
-                
                 def _read_stream(stream, prefix=""):
                     for line in iter(stream.readline, ''):
                         if line: GLib.idle_add(self.terminal._log, prefix + line.rstrip())
@@ -913,7 +824,6 @@ class ControlPanel(Gtk.Box):
                 t_out = threading.Thread(target=_read_stream, args=(proc.stdout,), daemon=True)
                 t_err = threading.Thread(target=_read_stream, args=(proc.stderr, ""), daemon=True)
                 t_out.start(); t_err.start(); t_out.join(); t_err.join(); proc.wait()
-                
                 if name: self.processes.pop(name, None)
                 GLib.idle_add(self._set_dot, name, False); GLib.idle_add(self.terminal._log, f"✓ Finished (code {proc.returncode})")
             except Exception as e:
@@ -928,9 +838,7 @@ class ControlPanel(Gtk.Box):
         return mp if mp.exists() else (list(root.rglob("manage.py"))[0] if list(root.rglob("manage.py")) else None)
 
     def _run_manage_command(self, command):
-        if command in ("shell", "dbshell"):
-            return self._run_interactive_command(command)
-            
+        if command in ("shell", "dbshell"): return self._run_interactive_command(command)
         mp = self._manage_path()
         if not mp: return
         self.terminal._log(f"▶ python {mp.name} {command}")
@@ -939,29 +847,19 @@ class ControlPanel(Gtk.Box):
     def _run_interactive_command(self, command):
         mp = self._manage_path()
         if not mp: return
-        terminals = [
-            ("gnome-terminal", "--"), ("konsole", "-e"), ("xfce4-terminal", "-x"),
-            ("alacritty", "-e"), ("kitty", "-e"), ("xterm", "-e"), ("x-terminal-emulator", "-e")
-        ]
+        terminals = [("gnome-terminal", "--"), ("konsole", "-e"), ("xfce4-terminal", "-x"), ("alacritty", "-e"), ("kitty", "-e"), ("xterm", "-e"), ("x-terminal-emulator", "-e")]
         term_cmd, exec_flag = None, "-e"
         for t, flag in terminals:
-            if shutil.which(t):
-                term_cmd, exec_flag = t, flag
-                break
-        if not term_cmd:
-            return self.terminal._log("❌ Aucun émulateur de terminal trouvé.")
+            if shutil.which(t): term_cmd, exec_flag = t, flag; break
+        if not term_cmd: return self.terminal._log("❌ Aucun émulateur de terminal trouvé.")
         full_cmd = f"{sys.executable} {mp.name} {command}"
         self.terminal._log(f"🖥 Ouverture d'un terminal externe pour: {full_cmd}")
-        try:
-            subprocess.Popen([term_cmd, exec_flag, full_cmd], cwd=str(mp.parent))
-        except Exception as e:
-            self.terminal._log(f"❌ Échec de l'ouverture du terminal: {e}")
+        try: subprocess.Popen([term_cmd, exec_flag, full_cmd], cwd=str(mp.parent))
+        except Exception as e: self.terminal._log(f"❌ Échec de l'ouverture du terminal: {e}")
 
     def _show_createsuperuser_dialog(self, *_):
-        dialog = Gtk.Dialog(title="Créer un Superutilisateur Django", transient_for=self.get_root())
-        dialog.set_default_size(400, 300)
-        content = dialog.get_content_area()
-        content.set_spacing(12); set_margins(content, 16)
+        dialog = Gtk.Dialog(title="Créer un Superutilisateur Django", transient_for=self.get_root()); dialog.set_default_size(400, 300)
+        content = dialog.get_content_area(); content.set_spacing(12); set_margins(content, 16)
         grid = Gtk.Grid(); grid.set_row_spacing(8); grid.set_column_spacing(8)
         grid.attach(Gtk.Label(label="Nom d'utilisateur :", xalign=0), 0, 0, 1, 1)
         entry_user = Gtk.Entry(); entry_user.set_placeholder_text("admin"); grid.attach(entry_user, 1, 0, 1, 1)
@@ -972,32 +870,20 @@ class ControlPanel(Gtk.Box):
         grid.attach(Gtk.Label(label="Confirmer le mot de passe :", xalign=0), 0, 3, 1, 1)
         entry_pwd_confirm = Gtk.Entry(); entry_pwd_confirm.set_visibility(False); grid.attach(entry_pwd_confirm, 1, 3, 1, 1)
         content.append(grid)
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        btn_box.set_halign(Gtk.Align.END)
-        btn_cancel = Gtk.Button(label="Annuler")
-        btn_create = Gtk.Button(label="✅ Créer", css_classes=["suggested-action"])
-        btn_box.append(btn_cancel); btn_box.append(btn_create)
-        content.append(btn_box)
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6); btn_box.set_halign(Gtk.Align.END)
+        btn_cancel = Gtk.Button(label="Annuler"); btn_create = Gtk.Button(label="✅ Créer", css_classes=["suggested-action"])
+        btn_box.append(btn_cancel); btn_box.append(btn_create); content.append(btn_box)
         def on_create(*_):
-            username = entry_user.get_text().strip()
-            email = entry_email.get_text().strip()
-            pwd = entry_pwd.get_text()
-            pwd_confirm = entry_pwd_confirm.get_text()
-            if not username or not pwd:
-                self.show_toast("❌ Le nom d'utilisateur et le mot de passe sont requis")
-                return
-            if pwd != pwd_confirm:
-                self.show_toast("❌ Les mots de passe ne correspondent pas")
-                return
+            username = entry_user.get_text().strip(); email = entry_email.get_text().strip(); pwd = entry_pwd.get_text(); pwd_confirm = entry_pwd_confirm.get_text()
+            if not username or not pwd: self.show_toast("❌ Le nom d'utilisateur et le mot de passe sont requis"); return
+            if pwd != pwd_confirm: self.show_toast("❌ Les mots de passe ne correspondent pas"); return
             mp = self._manage_path()
             if not mp: return
             self.terminal._log(f"▶ Création du superutilisateur: {username}")
             extra_env = {"DJANGO_SUPERUSER_USERNAME": username, "DJANGO_SUPERUSER_EMAIL": email, "DJANGO_SUPERUSER_PASSWORD": pwd}
             self._run_cmd([sys.executable, str(mp), "createsuperuser", "--noinput"], cwd=str(mp.parent), extra_env=extra_env)
             dialog.destroy()
-        btn_create.connect("clicked", on_create)
-        btn_cancel.connect("clicked", lambda *_: dialog.destroy())
-        dialog.present()
+        btn_create.connect("clicked", on_create); btn_cancel.connect("clicked", lambda *_: dialog.destroy()); dialog.present()
 
     def _get_free_port(self, preferred_port=None):
         cfg = self.get_config()
@@ -1068,6 +954,542 @@ class ControlPanel(Gtk.Box):
             dialog.destroy()
         btn_kill.connect("clicked", on_kill); btn_cancel.connect("clicked", lambda *_: dialog.destroy()); dialog.present()
 
+    def _ufw_allow_dialog(self, *_):
+        dialog = Gtk.Dialog(title="Ouvrir un port (UFW)", transient_for=self.get_root()); dialog.set_default_size(320, 160)
+        content = dialog.get_content_area(); set_margins(content, 12)
+        content.append(Gtk.Label(label="Numéro de port à ouvrir (TCP) :", xalign=0, margin_bottom=6))
+        entry = Gtk.Entry(); entry.set_placeholder_text("ex: 8000"); content.append(entry)
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_cancel = Gtk.Button(label="Annuler"); btn_open = Gtk.Button(label="🔓 Ouvrir"); btn_open.add_css_class("suggested-action")
+        btn_box.append(btn_cancel); btn_box.append(btn_open); content.append(btn_box)
+        def on_open(*_):
+            try:
+                port = int(entry.get_text().strip())
+                self.terminal._log(f"🔓 Demande d'ouverture du port {port}/tcp via UFW...")
+                proc = subprocess.run(["ufw", "allow", f"{port}/tcp"], capture_output=True, text=True)
+                if proc.returncode == 0: self.terminal._log(f"✅ Port {port}/tcp ouvert avec succès."); self.show_toast(f"✅ Port {port} ouvert")
+                else: self.terminal._log(f"❌ Erreur UFW: {proc.stderr.strip() or proc.stdout.strip() or 'Erreur inconnue'}"); self.show_toast("❌ Échec de l'ouverture du port")
+            except ValueError: self.terminal._log("❌ Port invalide (doit être un nombre entier)")
+            dialog.destroy()
+        btn_open.connect("clicked", on_open); btn_cancel.connect("clicked", lambda *_: dialog.destroy()); dialog.present()
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  GESTION POSTGRESQL INTÉGRÉE
+    # ═══════════════════════════════════════════════════════════════════════
+    def _run_pg_initdb(self, *_):
+        cfg = self.get_config()
+        device = cfg.get("pg_device", "/dev/sda3")
+        mount_point = cfg.get("pg_mount_point", "/var/lib/pgsql/data")
+        self.terminal._log("🔧 === Initialisation PostgreSQL ===")
+        self.terminal._log(f"📁 Point de montage: {mount_point}")
+        def _thread():
+            try:
+                GLib.idle_add(self.terminal._log, f"▶ mkdir -p {mount_point}")
+                subprocess.run(["mkdir", "-p", mount_point], check=True)
+                mount_check = subprocess.run(["mountpoint", "-q", mount_point], capture_output=True)
+                if mount_check.returncode != 0:
+                    GLib.idle_add(self.terminal._log, f"▶ Montage de {device} sur {mount_point}")
+                    subprocess.run(["sudo", "mount", device, mount_point], check=True)
+                else: GLib.idle_add(self.terminal._log, "✅ Déjà monté")
+                
+                pg_version_path = Path(mount_point) / "PG_VERSION"
+                if not pg_version_path.exists():
+                    GLib.idle_add(self.terminal._log, "▶ Initialisation de la base (initdb)...")
+                    subprocess.run(["sudo", "chown", "-R", "postgres:postgres", mount_point], check=True)
+                    subprocess.run(["sudo", "chmod", "700", mount_point], check=True)
+                    subprocess.run(["sudo", "-u", "postgres", "initdb", "-D", mount_point], check=True)
+                else: GLib.idle_add(self.terminal._log, "✅ Base de données déjà initialisée")
+                
+                GLib.idle_add(self.terminal._log, "▶ Démarrage de PostgreSQL...")
+                status = subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", mount_point, "status"], capture_output=True)
+                if status.returncode != 0:
+                    subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", mount_point, "start"], check=True)
+                    GLib.idle_add(self.terminal._log, "✅ PostgreSQL démarré")
+                else: GLib.idle_add(self.terminal._log, "✅ PostgreSQL déjà en cours d'exécution")
+                
+                GLib.idle_add(self.show_toast, "✅ Initialisation PostgreSQL réussie")
+                GLib.idle_add(self.terminal._log, "=== OK ===")
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self.terminal._log, f"❌ Erreur lors de l'exécution: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec de l'initialisation")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_pg_creatdb(self, *_):
+        cfg = self.get_config()
+        db_name = cfg.get("pg_db_name", "ma_base")
+        db_user = cfg.get("pg_db_user", "mon_user")
+        db_password = cfg.get("pg_db_password", "mot_de_passe").replace("'", "''")
+        self.terminal._log("➕ === Création Base & Utilisateur ===")
+        def _thread():
+            try:
+                check_user = subprocess.run(["sudo", "-u", "postgres", "psql", "-tAc", f"SELECT 1 FROM pg_roles WHERE rolname='{db_user}'"], capture_output=True, text=True).stdout.strip()
+                if check_user != "1":
+                    GLib.idle_add(self.terminal._log, f"▶ Création de l'utilisateur {db_user}")
+                    subprocess.run(["sudo", "-u", "postgres", "psql", "-c", f"CREATE USER {db_user} WITH PASSWORD '{db_password}';"], check=True)
+                else: GLib.idle_add(self.terminal._log, "✅ Utilisateur déjà existant")
+                
+                check_db = subprocess.run(["sudo", "-u", "postgres", "psql", "-tAc", f"SELECT 1 FROM pg_database WHERE datname='{db_name}'"], capture_output=True, text=True).stdout.strip()
+                if check_db != "1":
+                    GLib.idle_add(self.terminal._log, f"▶ Création de la base {db_name}")
+                    subprocess.run(["sudo", "-u", "postgres", "createdb", "-O", db_user, db_name], check=True)
+                else: GLib.idle_add(self.terminal._log, "✅ Base déjà existante")
+                
+                GLib.idle_add(self.terminal._log, "▶ Attribution des privilèges...")
+                subprocess.run(["sudo", "-u", "postgres", "psql", "-c", f"GRANT ALL PRIVILEGES ON DATABASE {db_name} TO {db_user};"], check=True)
+                subprocess.run(["sudo", "-u", "postgres", "psql", "-d", db_name, "-c", f"GRANT USAGE, CREATE ON SCHEMA public TO {db_user};"], check=True)
+                subprocess.run(["sudo", "-u", "postgres", "psql", "-d", db_name, "-c", f"ALTER SCHEMA public OWNER TO {db_user};"], check=True)
+                
+                GLib.idle_add(self.show_toast, "✅ Base et utilisateur configurés")
+                GLib.idle_add(self.terminal._log, "=== OK ===")
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self.terminal._log, f"❌ Erreur SQL: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec de la création")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_pg_rundb(self, *_):
+        cfg = self.get_config()
+        device = cfg.get("pg_device", "/dev/sda3")
+        pgdata = cfg.get("pg_mount_point", "/var/lib/pgsql/data")
+        bind_ip = cfg.get("pg_bind_ip", "127.0.0.1")
+        listen_addr = "*" if bind_ip == "0.0.0.0" else bind_ip
+        
+        self.terminal._log("🚀 === Démarrage et Configuration IP ===")
+        def _thread():
+            try:
+                subprocess.run(["mkdir", "-p", pgdata], check=True)
+                mount_check = subprocess.run(["mountpoint", "-q", pgdata], capture_output=True)
+                if mount_check.returncode != 0:
+                    GLib.idle_add(self.terminal._log, f"▶ Montage de {device} sur {pgdata}")
+                    subprocess.run(["sudo", "mount", device, pgdata], check=True)
+                else: 
+                    GLib.idle_add(self.terminal._log, "✅ Déjà monté")
+                
+                status = subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", pgdata, "status"], capture_output=True)
+                is_running = (status.returncode == 0)
+                
+                if not is_running:
+                    GLib.idle_add(self.terminal._log, "▶ Démarrage de PostgreSQL...")
+                    subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", pgdata, "start"], check=True)
+                else: 
+                    GLib.idle_add(self.terminal._log, "✅ PostgreSQL déjà en cours d'exécution")
+                
+                GLib.idle_add(self.terminal._log, f"▶ Configuration de listen_addresses sur '{listen_addr}'...")
+                subprocess.run(["sudo", "-u", "postgres", "psql", "-c", f"ALTER SYSTEM SET listen_addresses = '{listen_addr}';"], check=True)
+                
+                if bind_ip == "0.0.0.0":
+                    pg_hba_path = Path(pgdata) / "pg_hba.conf"
+                    GLib.idle_add(self.terminal._log, "🌐 Mode Réseau détecté. Automatisation de pg_hba.conf...")
+                    hba_content = pg_hba_path.read_text(encoding="utf-8")
+                    if "0.0.0.0/0" not in hba_content:
+                        GLib.idle_add(self.terminal._log, "▶ Ajout de la règle d'accès distant dans pg_hba.conf...")
+                        rule = "\n# --- Ajouté automatiquement par Gykhamine Studio ---\nhost    all             all             0.0.0.0/0               scram-sha-256\n"
+                        subprocess.run(["sudo", "tee", "-a", str(pg_hba_path)], input=rule, text=True, check=True)
+                        GLib.idle_add(self.terminal._log, "✅ Règle pg_hba.conf ajoutée avec succès.")
+                    else:
+                        GLib.idle_add(self.terminal._log, "✅ La règle d'accès distant est déjà présente dans pg_hba.conf.")
+                
+                GLib.idle_add(self.terminal._log, "▶ Redémarrage propre pour appliquer la configuration...")
+                subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", pgdata, "restart", "-m", "fast"], check=True)
+                
+                GLib.idle_add(self.show_toast, "✅ PostgreSQL démarré et IP configurée")
+                GLib.idle_add(self.terminal._log, "=== READY ===")
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self.terminal._log, f"❌ Erreur: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec du démarrage/config")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_pg_stopdb(self, *_):
+        cfg = self.get_config()
+        pgdata = cfg.get("pg_mount_point", "/var/lib/pgsql/data")
+        self.terminal._log("🛑 === Arrêt de PostgreSQL ===")
+        def _thread():
+            try:
+                GLib.idle_add(self.terminal._log, "▶ Arrêt propre de PostgreSQL (mode fast)...")
+                subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", pgdata, "stop", "-m", "fast"], check=True)
+                GLib.idle_add(self.show_toast, "✅ PostgreSQL arrêté avec succès")
+                GLib.idle_add(self.terminal._log, "=== STOPPED ===")
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self.terminal._log, f"❌ Erreur lors de l'arrêt: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec de l'arrêt")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  GESTION REDIS INTÉGRÉE
+    # ═══════════════════════════════════════════════════════════════════════
+    def _run_redis_start(self, *_):
+        cfg = self.get_config()
+        redis_ip = cfg.get("redis_ip", "127.0.0.1")
+        redis_port = cfg.get("redis_port", "6379")
+        data_dir = cfg.get("redis_data_dir", str(Path.home() / "redis_data"))
+        use_persistence = cfg.get("redis_use_persistence", True)
+        env_path = cfg.get("redis_env_path", "")
+        update_env = cfg.get("redis_update_env", False)
+
+        self.terminal._log("🔴 === Démarrage de Redis ===")
+        def _thread():
+            try:
+                if update_env and env_path and Path(env_path).exists():
+                    GLib.idle_add(self.terminal._log, "▶ Mise à jour de REDIS_URL dans le .env...")
+                    with open(env_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    redis_url = f"redis://{redis_ip}:{redis_port}/1"
+                    if "REDIS_URL=" in content:
+                        content = re.sub(r'^REDIS_URL=.*$', f'REDIS_URL={redis_url}', content, flags=re.MULTILINE)
+                    else:
+                        content += f"\nREDIS_URL={redis_url}\n"
+                    with open(env_path, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    GLib.idle_add(self.terminal._log, f"✅ REDIS_URL synchronisé : {redis_url}")
+                elif update_env:
+                    GLib.idle_add(self.terminal._log, f"⚠ Fichier .env introuvable à : {env_path}")
+
+                if use_persistence:
+                    os.makedirs(data_dir, exist_ok=True)
+                    cmd = f"redis-server --bind {redis_ip} --port {redis_port} --dir {data_dir} --appendonly yes --daemonize yes"
+                else:
+                    cmd = f"redis-server --bind {redis_ip} --port {redis_port} --daemonize yes"
+                
+                GLib.idle_add(self.terminal._log, f"▶ Exécution : {cmd}")
+                status = os.system(cmd)
+                if status == 0:
+                    GLib.idle_add(self._set_dot, "redis", True)
+                    GLib.idle_add(self.show_toast, "✅ Redis démarré")
+                    GLib.idle_add(self.terminal._log, f"=== READY : {redis_ip}:{redis_port} ===")
+                else:
+                    GLib.idle_add(self._set_dot, "redis", False)
+                    GLib.idle_add(self.show_toast, "❌ Échec du démarrage Redis")
+                    GLib.idle_add(self.terminal._log, "❌ Impossible de démarrer le serveur Redis.")
+            except Exception as e:
+                GLib.idle_add(self._set_dot, "redis", False)
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_redis_stop(self, *_):
+        cfg = self.get_config()
+        redis_ip = cfg.get("redis_ip", "127.0.0.1")
+        redis_port = cfg.get("redis_port", "6379")
+        self.terminal._log("🛑 === Arrêt de Redis ===")
+        def _thread():
+            try:
+                GLib.idle_add(self.terminal._log, f"▶ Arrêt de Redis sur {redis_ip}:{redis_port}...")
+                subprocess.run(["redis-cli", "-h", redis_ip, "-p", redis_port, "shutdown", "nosave"], capture_output=True)
+                subprocess.run(["pkill", "-f", "redis-server"], capture_output=True)
+                GLib.idle_add(self._set_dot, "redis", False)
+                GLib.idle_add(self.show_toast, "✅ Redis arrêté")
+                GLib.idle_add(self.terminal._log, "=== STOPPED ===")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  GESTION NFS INTÉGRÉE
+    # ═══════════════════════════════════════════════════════════════════════
+    def _run_nfs_server_start(self, *_):
+        cfg = self.get_config()
+        export_dir = cfg.get("nfs_export_dir", "/run/media/gykhamine/GY/gy/media")
+        mode = cfg.get("nfs_server_mode", "local")
+        lan_network = cfg.get("nfs_lan_network", "192.168.1.0/24") if mode == "network" else "127.0.0.1"
+        
+        self.terminal._log("📁 === Démarrage du Serveur NFS ===")
+        def _thread():
+            try:
+                GLib.idle_add(self.terminal._log, f"▶ Création du dossier d'export : {export_dir}")
+                subprocess.run(["mkdir", "-p", export_dir], check=True)
+                subprocess.run(["chmod", "777", export_dir], check=True)
+                
+                GLib.idle_add(self.terminal._log, "▶ Mise à jour de /etc/exports...")
+                exports_path = "/etc/exports"
+                try:
+                    with open(exports_path, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                except FileNotFoundError:
+                    lines = []
+                
+                lines = [l for l in lines if not l.strip().startswith("# --- Gykhamine NFS ---") and not l.strip().startswith(export_dir)]
+                new_entry = f"# --- Gykhamine NFS ---\n{export_dir} {lan_network}(rw,sync,no_subtree_check,no_root_squash)\n"
+                lines.append(new_entry)
+                
+                content = "".join(lines)
+                subprocess.run(["sudo", "tee", exports_path], input=content, text=True, check=True)
+                
+                GLib.idle_add(self.terminal._log, "▶ Application de la configuration (exportfs -ra)...")
+                subprocess.run(["sudo", "exportfs", "-ra"], check=True)
+                
+                GLib.idle_add(self.terminal._log, "▶ Redémarrage du service nfs-server...")
+                subprocess.run(["sudo", "systemctl", "restart", "nfs-server.service"], check=True)
+                
+                GLib.idle_add(self._set_dot, "nfs_server", True)
+                GLib.idle_add(self.show_toast, "✅ Serveur NFS démarré")
+                GLib.idle_add(self.terminal._log, f"=== READY : Export {export_dir} vers {lan_network} ===")
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self._set_dot, "nfs_server", False)
+                GLib.idle_add(self.terminal._log, f"❌ Erreur: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec du démarrage NFS")
+            except Exception as e:
+                GLib.idle_add(self._set_dot, "nfs_server", False)
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_nfs_server_stop(self, *_):
+        cfg = self.get_config()
+        export_dir = cfg.get("nfs_export_dir", "/run/media/gykhamine/GY/gy/media")
+        self.terminal._log("🛑 === Arrêt du Serveur NFS ===")
+        def _thread():
+            try:
+                exports_path = "/etc/exports"
+                try:
+                    with open(exports_path, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                    lines = [l for l in lines if not l.strip().startswith("# --- Gykhamine NFS ---") and not l.strip().startswith(export_dir)]
+                    content = "".join(lines)
+                    subprocess.run(["sudo", "tee", exports_path], input=content, text=True, check=True)
+                except Exception: pass
+                
+                subprocess.run(["sudo", "exportfs", "-ra"], check=True)
+                subprocess.run(["sudo", "systemctl", "stop", "nfs-server.service"], check=True)
+                
+                GLib.idle_add(self._set_dot, "nfs_server", False)
+                GLib.idle_add(self.show_toast, "✅ Serveur NFS arrêté")
+                GLib.idle_add(self.terminal._log, "=== STOPPED ===")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_nfs_client_mount(self, *_):
+        cfg = self.get_config()
+        server_ip = cfg.get("nfs_client_server_ip", "192.168.1.10")
+        export_dir = cfg.get("nfs_client_export_dir", "/srv/nfs")
+        mount_point = cfg.get("nfs_client_mount_point", str(Path.home() / "nfs_mount"))
+        
+        self.terminal._log("💻 === Montage Client NFS ===")
+        def _thread():
+            try:
+                subprocess.run(["mkdir", "-p", mount_point], check=True)
+                
+                GLib.idle_add(self.terminal._log, f"▶ Test de reachabilité du serveur {server_ip}...")
+                ping = subprocess.run(["ping", "-c", "1", "-W", "2", server_ip], capture_output=True)
+                if ping.returncode != 0:
+                    GLib.idle_add(self.terminal._log, "❌ Serveur inaccessible, fallback local ou vérifiez l'IP.")
+                    GLib.idle_add(self.show_toast, "❌ Serveur NFS injoignable")
+                    return
+                
+                GLib.idle_add(self.terminal._log, f"▶ Montage de {server_ip}:{export_dir} sur {mount_point}...")
+                subprocess.run(["sudo", "mount", "-t", "nfs", f"{server_ip}:{export_dir}", mount_point], check=True)
+                
+                GLib.idle_add(self._set_dot, "nfs_client", True)
+                GLib.idle_add(self.show_toast, "✅ Partage NFS monté")
+                GLib.idle_add(self.terminal._log, f"=== MOUNTED : {mount_point} ===")
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self._set_dot, "nfs_client", False)
+                GLib.idle_add(self.terminal._log, f"❌ Erreur de montage: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec du montage NFS")
+            except Exception as e:
+                GLib.idle_add(self._set_dot, "nfs_client", False)
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _run_nfs_client_umount(self, *_):
+        cfg = self.get_config()
+        mount_point = cfg.get("nfs_client_mount_point", str(Path.home() / "nfs_mount"))
+        self.terminal._log("📤 === Démontage Client NFS ===")
+        def _thread():
+            try:
+                subprocess.run(["sudo", "umount", "-l", mount_point], check=True)
+                GLib.idle_add(self._set_dot, "nfs_client", False)
+                GLib.idle_add(self.show_toast, "✅ Partage NFS démonté")
+                GLib.idle_add(self.terminal._log, "=== UNMOUNTED ===")
+            except subprocess.CalledProcessError as e:
+                GLib.idle_add(self.terminal._log, f"❌ Erreur de démontage: {e}")
+                GLib.idle_add(self.show_toast, "❌ Échec du démontage")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  VISUALISATION DES DONNÉES ET EXPORT (TABLEAU RÉEL)
+    # ═══════════════════════════════════════════════════════════════════════
+    def _show_db_stats(self, *_):
+        mp = self._manage_path()
+        if not mp:
+            self.terminal._log("❌ manage.py introuvable. Ouvrez d'abord un projet Django valide.")
+            self.show_toast("❌ Projet Django non détecté"); return
+        self.terminal._log("🔍 Récupération des données via Django ORM (max 100 lignes/table)...")
+        self.show_toast("⏳ Chargement des données...")
+        django_script = """
+import json
+from django.apps import apps
+from django.db import models
+result = []
+for model in apps.get_models():
+    try:
+        fields_info = []
+        for f in model._meta.fields:
+            fields_info.append({"name": f.name, "type": f.get_internal_type(), "is_pk": bool(f.primary_key), "is_fk": isinstance(f, (models.ForeignKey, models.OneToOneField))})
+        rows_data = []
+        try:
+            qs = model.objects.all()[:100]
+            for obj in qs:
+                row_dict = {}
+                for f in model._meta.fields:
+                    val = getattr(obj, f.name)
+                    row_dict[f.name] = str(val) if val is not None else "NULL"
+                rows_data.append(row_dict)
+        except Exception as e:
+            rows_data = [{"_error": str(e)}]
+        result.append({"table": model._meta.db_table, "model": model._meta.object_name, "total_rows": model.objects.count(), "fields": fields_info, "data": rows_data})
+    except Exception as e:
+        result.append({"table": model._meta.db_table, "error": str(e)})
+print(json.dumps(result, default=str))
+"""
+        cmd = [sys.executable, str(mp), "shell", "-c", django_script]
+        def _thread():
+            try:
+                env = os.environ.copy(); env["PYTHONUNBUFFERED"] = "1"
+                proc = subprocess.run(cmd, cwd=str(mp.parent), capture_output=True, text=True, env=env, timeout=20)
+                if proc.returncode == 0:
+                    output = proc.stdout.strip(); stats = []
+                    for line in reversed(output.split('\n')):
+                        line = line.strip()
+                        if line.startswith('[') or line.startswith('{'):
+                            try: stats = json.loads(line); break
+                            except json.JSONDecodeError: continue
+                    if stats: GLib.idle_add(self._display_db_stats_popup, stats)
+                    else:
+                        GLib.idle_add(self.terminal._log, f"❌ Erreur de parsing JSON. Sortie brute: {output}")
+                        GLib.idle_add(self.show_toast, "❌ Erreur de format des données")
+                else:
+                    GLib.idle_add(self.terminal._log, f"❌ Erreur Django ORM: {proc.stderr}")
+                    GLib.idle_add(self.show_toast, "❌ Échec de la récupération")
+            except subprocess.TimeoutExpired:
+                GLib.idle_add(self.terminal._log, "❌ Délai d'attente dépassé (la base est peut-être trop volumineuse).")
+                GLib.idle_add(self.show_toast, "⏱ Délai dépassé")
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+                GLib.idle_add(self.show_toast, "❌ Erreur inattendue")
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _display_db_stats_popup(self, stats: list):
+        self.db_stats_data = stats; self.current_selected_table_data = None
+        dialog = Gtk.Dialog(title="📊 Visualisation des Tables et Données", transient_for=self.get_root()); dialog.set_default_size(1000, 650)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12); set_margins(content, 16); dialog.set_child(content)
+        header_info = Gtk.Label(label=f"{len(stats)} table(s) trouvée(s). Cliquez sur une table pour voir ses données (max 100 lignes)."); header_info.add_css_class("heading"); content.append(header_info); content.append(Gtk.Separator())
+        main_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12); main_box.set_vexpand(True)
+        scroll_tables = Gtk.ScrolledWindow(); scroll_tables.set_size_request(250, -1)
+        self.listbox_tables = Gtk.ListBox(); self.listbox_tables.set_selection_mode(Gtk.SelectionMode.SINGLE); scroll_tables.set_child(self.listbox_tables); main_box.append(scroll_tables)
+        details_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8); details_box.set_hexpand(True)
+        self.current_table_label = Gtk.Label(label="Sélectionnez une table pour voir les données", xalign=0); self.current_table_label.add_css_class("heading"); details_box.append(self.current_table_label)
+        scroll_fields = Gtk.ScrolledWindow(); scroll_fields.set_vexpand(True); scroll_fields.set_hexpand(True)
+        self.data_store = Gtk.ListStore(); self.tree_view = Gtk.TreeView(model=self.data_store); scroll_fields.set_child(self.tree_view); details_box.append(scroll_fields)
+        export_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8); export_box.set_halign(Gtk.Align.END)
+        self.btn_csv = Gtk.Button(label="📄 Exporter CSV"); self.btn_csv.add_css_class("ctrl-btn"); self.btn_csv.set_sensitive(False); self.btn_csv.connect("clicked", lambda *_: self._export_to_csv())
+        self.btn_excel = Gtk.Button(label="📊 Exporter Excel (Pandas)"); self.btn_excel.add_css_class("ctrl-btn"); self.btn_excel.set_sensitive(False); self.btn_excel.connect("clicked", lambda *_: self._export_to_excel())
+        export_box.append(self.btn_csv); export_box.append(self.btn_excel); details_box.append(export_box)
+        main_box.append(details_box); content.append(main_box)
+        if not stats:
+            lbl_empty = Gtk.Label(label="Aucune table trouvée ou base de données vide."); lbl_empty.set_margin_top(20); lbl_empty.add_css_class("dim-label"); self.listbox_tables.append(lbl_empty)
+        else:
+            for item in stats:
+                row = Gtk.ListBoxRow()
+                if "error" in item:
+                    lbl = Gtk.Label(label=f"⚠️ {item['table']} (Erreur)", xalign=0); lbl.add_css_class("dim-label")
+                else:
+                    lbl = Gtk.Label(label=f"🗄 {item['table']} ({item['total_rows']} lignes)", xalign=0); lbl.set_margin_start(8); lbl.set_margin_top(6); lbl.set_margin_bottom(6)
+                row.set_child(lbl); row._data = item; self.listbox_tables.append(row)
+            self.listbox_tables.connect("row-selected", self._on_table_selected)
+        btn_close = Gtk.Button(label="Fermer"); btn_close.set_halign(Gtk.Align.END); btn_close.set_margin_top(8); btn_close.connect("clicked", lambda *_: dialog.destroy()); content.append(btn_close)
+        dialog.present()
+
+    def _on_table_selected(self, listbox, row):
+        self.data_store.clear()
+        for col in self.tree_view.get_columns():
+            self.tree_view.remove_column(col)
+        if not row or not hasattr(row, "_data"):
+            self.current_table_label.set_text("Sélectionnez une table pour voir les données")
+            self.current_selected_table_data = None; self.btn_csv.set_sensitive(False); self.btn_excel.set_sensitive(False); return
+        item = row._data; self.current_selected_table_data = item
+        if "error" in item:
+            self.current_table_label.set_text(f"⚠️ Erreur sur la table: {item['table']}")
+            self.btn_csv.set_sensitive(False); self.btn_excel.set_sensitive(False); return
+        self.current_table_label.set_text(f"🗄 Table: {item['table']} (Affichage de {len(item['data'])} / {item['total_rows']} lignes)")
+        self.btn_csv.set_sensitive(True); self.btn_excel.set_sensitive(True)
+        fields = item.get("fields", []); data_rows = item.get("data", []); col_types = [str] * len(fields)
+        self.data_store = Gtk.ListStore(*col_types); self.tree_view.set_model(self.data_store)
+        for idx, field in enumerate(fields):
+            renderer = Gtk.CellRendererText(); title = field["name"]
+            if field["is_pk"]:
+                title = f"🔑 {title}"; renderer.set_property("foreground", "#f1c40f"); renderer.set_property("weight", Pango.Weight.BOLD)
+            elif field["is_fk"]:
+                title = f"🔗 {title}"; renderer.set_property("foreground", "#3498db")
+            col = Gtk.TreeViewColumn(title, renderer, text=idx); col.set_resizable(True); col.set_min_width(100); self.tree_view.append_column(col)
+        for row_data in data_rows:
+            if "_error" in row_data:
+                self.data_store.append([f"Erreur de lecture: {row_data['_error']}"] + [""] * (len(fields) - 1)); break
+            row_values = [str(row_data.get(f["name"], "")) for f in fields]
+            self.data_store.append(row_values)
+
+    def _export_to_csv(self):
+        if not self.current_selected_table_data: return
+        try:
+            dialog = Gtk.FileDialog(title=f"Exporter {self.current_selected_table_data['table']} en CSV")
+            dialog.save(self.get_root(), None, self._on_csv_save_selected)
+        except Exception as e:
+            self.terminal._log(f"❌ Erreur export CSV: {e}"); self.show_toast("❌ Échec de l'export CSV")
+
+    def _on_csv_save_selected(self, dialog, result):
+        try:
+            file = dialog.save_finish(result)
+            if not file: return
+            filepath = Path(file.get_path())
+            if not str(filepath).endswith('.csv'): filepath = filepath.with_suffix('.csv')
+            import csv
+            item = self.current_selected_table_data; fields = item.get("fields", []); data_rows = item.get("data", [])
+            with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f); writer.writerow([f["name"] for f in fields])
+                for row_data in data_rows:
+                    if "_error" not in row_data: writer.writerow([row_data.get(f["name"], "") for f in fields])
+            self.terminal._log(f"✅ Export CSV réussi: {filepath} ({len(data_rows)} lignes)"); self.show_toast("✅ Export CSV réussi")
+        except Exception as e:
+            self.terminal._log(f"❌ Erreur lors de l'écriture du CSV: {e}"); self.show_toast("❌ Échec de l'export CSV")
+
+    def _export_to_excel(self):
+        if not self.current_selected_table_data: return
+        try:
+            import pandas as pd
+            dialog = Gtk.FileDialog(title=f"Exporter {self.current_selected_table_data['table']} en Excel")
+            dialog.save(self.get_root(), None, self._on_excel_save_selected)
+        except ImportError:
+            self.terminal._log("❌ Pandas n'est pas installé. Veuillez l'installer avec: pip install pandas openpyxl")
+            self.show_toast("❌ Pandas non installé (pip install pandas openpyxl)")
+        except Exception as e:
+            self.terminal._log(f"❌ Erreur export Excel: {e}"); self.show_toast("❌ Échec de l'export Excel")
+
+    def _on_excel_save_selected(self, dialog, result):
+        try:
+            import pandas as pd
+            file = dialog.save_finish(result)
+            if not file: return
+            filepath = Path(file.get_path())
+            if not str(filepath).endswith('.xlsx'): filepath = filepath.with_suffix('.xlsx')
+            item = self.current_selected_table_data; fields = item.get("fields", []); data_rows = item.get("data", [])
+            clean_data = []
+            for row_data in data_rows:
+                if "_error" not in row_data: clean_data.append({f["name"]: row_data.get(f["name"], "") for f in fields})
+            df = pd.DataFrame(clean_data); df.to_excel(filepath, index=False, engine='openpyxl')
+            self.terminal._log(f"✅ Export Excel réussi: {filepath} ({len(clean_data)} lignes)"); self.show_toast("✅ Export Excel réussi")
+        except ImportError:
+            self.terminal._log("❌ Pandas ou openpyxl n'est pas installé. Veuillez l'installer avec: pip install pandas openpyxl")
+            self.show_toast("❌ Pandas/openpyxl non installé")
+        except Exception as e:
+            self.terminal._log(f"❌ Erreur lors de l'écriture du fichier Excel: {e}"); self.show_toast("❌ Échec de l'export Excel")
+
     def _run_gy(self, rel_path: str, sudo=False):
         root = self.get_project_root()
         if not root: return
@@ -1088,7 +1510,11 @@ class ControlPanel(Gtk.Box):
         if cfg.get("open_browser_on_run", True): GLib.timeout_add_seconds(3, lambda: self._open_browser_url(f"http://{host}:{port}"))
 
     def _open_browser(self, *_): self._open_browser_url("http://localhost:8000")
-    def _open_browser_url(self, url): webbrowser.open(url); self.terminal._log(f"🌐 {url}"); return False
+    def _open_browser_url(self, url):
+        user = os.environ.get("SUDO_USER", "gykhamine")
+        self.terminal._log(f"🌐 Ouverture de {url} en tant que {user}...")
+        try: subprocess.run(["sudo", "-u", user, "xdg-open", url], check=False)
+        except Exception as e: self.terminal._log(f"❌ Erreur d'ouverture du navigateur: {e}"); return False
 
     def _compress_project(self, *_):
         root = self.get_project_root()
@@ -1204,8 +1630,7 @@ class BlockEditorView(Gtk.Box):
         self.blocks = parse_blocks(state, str(self.current_file) if self.current_file else ""); self._render_blocks()
 
     def load_file(self, path: Path):
-        self.current_file = path
-        self.file_label.set_text(f"📄  {path.name}")
+        self.current_file = path; self.file_label.set_text(f"📄  {path.name}")
         self.file_ext = path.suffix.lower().replace('.', ''); self.css_file = None
         if path.suffix == '.py':
             linked_css = path.with_suffix('.css')
@@ -1280,29 +1705,81 @@ class SettingsDialog(Adw.PreferencesDialog):
         page = Adw.PreferencesPage(); self.add(page)
         grp = Adw.PreferencesGroup(title="🤖 llama.cpp"); page.add(grp); self._rows = {}
         for key, title, placeholder in [("llama_server_path", "llama-server path", "/usr/local/bin/llama-server"), ("llama_model_path", ".gguf model path", "/models/qwen2.5-coder.gguf"), ("llama_host", "Host", "127.0.0.1"), ("llama_port", "Port", "8080")]:
-            row = Adw.EntryRow(title=title)
-            row.set_text(str(config.get(key, placeholder)))
-            self._rows[key] = row
-            grp.add(row)
+            row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, placeholder))); self._rows[key] = row; grp.add(row)
+        
         grp_ports = Adw.PreferencesGroup(title="🔌 Ports & Servers"); page.add(grp_ports)
         auto_port = Adw.SwitchRow(title="Auto-detect free ports"); auto_port.set_active(config.get("auto_find_free_port", True)); self._rows["auto_find_free_port"] = auto_port; grp_ports.add(auto_port)
         for key, title, default in [("default_port_range_start", "Range start", 8000), ("default_port_range_end", "Range end", 8010)]:
-            row = Adw.EntryRow(title=title)
-            row.set_text(str(config.get(key, default)))
-            self._rows[key] = row
-            grp_ports.add(row)
-        gunicorn_row = Adw.EntryRow(title="Gunicorn bind address")
-        gunicorn_row.set_text(str(config.get("gunicorn_bind", "0.0.0.0:8000")))
-        gunicorn_row.set_tooltip_text("e.g., 0.0.0.0:8000, 0.0.0.0:80 or 0.0.0.0:443")
+            row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, default))); self._rows[key] = row; grp_ports.add(row)
+        gunicorn_row = Adw.EntryRow(title="Gunicorn bind address"); gunicorn_row.set_text(str(config.get("gunicorn_bind", "0.0.0.0:8000"))); gunicorn_row.set_tooltip_text("e.g., 0.0.0.0:8000, 0.0.0.0:80 or 0.0.0.0:443")
         self._rows["gunicorn_bind"] = gunicorn_row; grp_ports.add(gunicorn_row)
+        
         grp2 = Adw.PreferencesGroup(title="🌐 Options"); page.add(grp2)
         browser_switch = Adw.SwitchRow(title="Open browser automatically"); browser_switch.set_active(config.get("open_browser_on_run", True)); self._rows["open_browser_on_run"] = browser_switch; grp2.add(browser_switch)
         theme_row = Adw.ComboRow(title="Theme"); theme_row.set_model(Gtk.StringList.new(["Dark", "Light"])); theme_row.set_selected(0 if config.get("theme", "dark") == "dark" else 1); self._rows["theme"] = theme_row; grp2.add(theme_row)
+        
         grp_paths = Adw.PreferencesGroup(title="📁 File Paths"); page.add(grp_paths)
         log_row = DirectoryPickerRow(title="Log file (.log)", subtitle="Destination folder for logs", initial_value=config.get("log_file_path", DEFAULT_CONFIG["log_file_path"]), filename="studio.log")
         self._rows["log_file_path"] = log_row; grp_paths.add(log_row)
         db_row = DirectoryPickerRow(title="SQLite database (.db)", subtitle="Destination folder for the database", initial_value=config.get("db_path", DEFAULT_CONFIG["db_path"]), filename="gykhamine_studio.db")
         self._rows["db_path"] = db_row; grp_paths.add(db_row)
+        
+        # === Groupe PostgreSQL ===
+        grp_pg = Adw.PreferencesGroup(title="🐘 Base de données (PostgreSQL)")
+        page.add(grp_pg)
+        pg_rows = [
+            ("pg_device", "Périphérique de la partition", "/dev/sda3"),
+            ("pg_mount_point", "Point de montage", "/var/lib/pgsql/data"),
+            ("pg_db_name", "Nom de la base de données", "ma_base"),
+            ("pg_db_user", "Nom d'utilisateur PostgreSQL", "mon_user"),
+            ("pg_db_password", "Mot de passe PostgreSQL", "mot_de_passe"),
+        ]
+        for key, title, placeholder in pg_rows:
+            row = Adw.EntryRow(title=title)
+            row.set_text(str(config.get(key, placeholder)))
+            self._rows[key] = row
+            grp_pg.add(row)
+        bind_row = Adw.ComboRow(title="Adresse d'écoute (IP)")
+        bind_row.set_model(Gtk.StringList.new(["127.0.0.1 (Local uniquement)", "0.0.0.0 (Réseau / Externe)"]))
+        bind_row.set_selected(0 if config.get("pg_bind_ip", "127.0.0.1") == "127.0.0.1" else 1)
+        self._rows["pg_bind_ip"] = bind_row
+        grp_pg.add(bind_row)
+        # ========================================
+
+        # === Groupe Redis ===
+        grp_redis = Adw.PreferencesGroup(title="🔴 Base de données (Redis)")
+        page.add(grp_redis)
+        redis_mode_row = Adw.ComboRow(title="Mode d'écoute")
+        redis_mode_row.set_model(Gtk.StringList.new(["Local (127.0.0.1)", "Réseau (0.0.0.0)"]))
+        redis_mode_row.set_selected(0 if config.get("redis_mode", "local") == "local" else 1)
+        self._rows["redis_mode"] = redis_mode_row; grp_redis.add(redis_mode_row)
+        
+        for key, title, placeholder in [("redis_port", "Port", "6379"), ("redis_data_dir", "Dossier de données", str(Path.home() / "redis_data")), ("redis_env_path", "Chemin du fichier .env", "/run/media/gykhamine/GY/Gykhamine/gy/.env")]:
+            row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, placeholder))); self._rows[key] = row; grp_redis.add(row)
+        
+        persist_row = Adw.SwitchRow(title="Utiliser la persistance (AOF)"); persist_row.set_active(config.get("redis_use_persistence", True)); self._rows["redis_use_persistence"] = persist_row; grp_redis.add(persist_row)
+        env_update_row = Adw.SwitchRow(title="Mettre à jour REDIS_URL dans le .env"); env_update_row.set_active(config.get("redis_update_env", False)); env_update_row.set_subtitle("Respecte la gestion manuelle si désactivé"); self._rows["redis_update_env"] = env_update_row; grp_redis.add(env_update_row)
+        # ========================================
+
+        # === Groupe NFS Serveur ===
+        grp_nfs_s = Adw.PreferencesGroup(title="📁 NFS Serveur")
+        page.add(grp_nfs_s)
+        nfs_s_mode_row = Adw.ComboRow(title="Mode d'accès")
+        nfs_s_mode_row.set_model(Gtk.StringList.new(["Local (127.0.0.1)", "Réseau (ex: 192.168.1.0/24)"]))
+        nfs_s_mode_row.set_selected(0 if config.get("nfs_server_mode", "local") == "local" else 1)
+        self._rows["nfs_server_mode"] = nfs_s_mode_row; grp_nfs_s.add(nfs_s_mode_row)
+        
+        for key, title, placeholder in [("nfs_export_dir", "Dossier à exporter", "/run/media/gykhamine/GY/gy/media"), ("nfs_lan_network", "Réseau autorisé (si mode Réseau)", "192.168.1.0/24")]:
+            row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, placeholder))); self._rows[key] = row; grp_nfs_s.add(row)
+        # ========================================
+
+        # === Groupe NFS Client ===
+        grp_nfs_c = Adw.PreferencesGroup(title="💻 NFS Client")
+        page.add(grp_nfs_c)
+        for key, title, placeholder in [("nfs_client_server_ip", "IP du serveur NFS", "192.168.1.10"), ("nfs_client_export_dir", "Dossier exporté sur le serveur", "/srv/nfs"), ("nfs_client_mount_point", "Point de montage local", str(Path.home() / "nfs_mount"))]:
+            row = Adw.EntryRow(title=title); row.set_text(str(config.get(key, placeholder))); self._rows[key] = row; grp_nfs_c.add(row)
+        # ========================================
+        
         grp_about = Adw.PreferencesGroup(title="ℹ️ About"); page.add(grp_about)
         version_row = Adw.ActionRow(title="Version", subtitle=f"Gykhamine Studio v{VERSION}"); version_row.set_icon_name("dialog-information-symbolic"); grp_about.add(version_row)
         btn = Gtk.Button(label="💾 Save"); btn.add_css_class("suggested-action"); btn.connect("clicked", self._do_save)
@@ -1312,7 +1789,16 @@ class SettingsDialog(Adw.PreferencesDialog):
         for key, row in self._rows.items():
             if isinstance(row, Adw.EntryRow): self.config[key] = row.get_text()
             elif isinstance(row, Adw.SwitchRow): self.config[key] = row.get_active()
-            elif isinstance(row, Adw.ComboRow): self.config["theme"] = "dark" if row.get_selected() == 0 else "light"
+            elif isinstance(row, Adw.ComboRow):
+                if key == "theme":
+                    self.config["theme"] = "dark" if row.get_selected() == 0 else "light"
+                elif key == "pg_bind_ip":
+                    self.config["pg_bind_ip"] = "127.0.0.1" if row.get_selected() == 0 else "0.0.0.0"
+                elif key == "redis_mode":
+                    self.config["redis_mode"] = "local" if row.get_selected() == 0 else "network"
+                    self.config["redis_ip"] = "127.0.0.1" if row.get_selected() == 0 else "0.0.0.0"
+                elif key == "nfs_server_mode":
+                    self.config["nfs_server_mode"] = "local" if row.get_selected() == 0 else "network"
             elif hasattr(row, "get_text"): self.config[key] = row.get_text()
         try:
             self.config["default_port_range_start"] = int(self.config.get("default_port_range_start", 8000))
@@ -1418,40 +1904,23 @@ class GykhamineStudioApp(Adw.Application):
         self.btn_toggle_terminal = Gtk.Button(label="🖥"); self.btn_toggle_terminal.set_tooltip_text("Show/Hide terminal"); self.btn_toggle_terminal.connect("clicked", self._toggle_terminal_panel); header.pack_end(self.btn_toggle_terminal)
         btn_fullscreen = Gtk.Button(label="⛶"); btn_fullscreen.set_tooltip_text("Fullscreen"); btn_fullscreen.connect("clicked", self._toggle_fullscreen); header.pack_end(btn_fullscreen)
         self.btn_toggle_right = Gtk.Button(label="⚙"); self.btn_toggle_right.set_tooltip_text("Show/Hide control panel"); self.btn_toggle_right.connect("clicked", self._toggle_right_panel); header.pack_end(self.btn_toggle_right)
-        btn_settings = Gtk.Button(icon_name="preferences-system-symbolic")
-        btn_settings.set_tooltip_text("Settings")
-        btn_settings.connect("clicked", self._open_settings)
-        header.pack_end(btn_settings)
+        btn_settings = Gtk.Button(icon_name="preferences-system-symbolic"); btn_settings.set_tooltip_text("Settings"); btn_settings.connect("clicked", self._open_settings); header.pack_end(btn_settings)
         main_box.append(header)
-        
         self.main_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
-        self.main_paned.set_vexpand(True); self.main_paned.set_hexpand(True)
-        self.main_paned.set_shrink_start_child(True); self.main_paned.set_shrink_end_child(False)
-        self.main_paned.set_resize_start_child(True); self.main_paned.set_resize_end_child(True)
+        self.main_paned.set_vexpand(True); self.main_paned.set_hexpand(True); self.main_paned.set_shrink_start_child(True); self.main_paned.set_shrink_end_child(False); self.main_paned.set_resize_start_child(True); self.main_paned.set_resize_end_child(True)
         self.file_panel = FilePanel(self._on_file_selected, self._load_project, self._on_file_created, self._on_file_imported)
-        self.main_paned.set_start_child(self.file_panel)
-        self.main_paned.set_position(280)
-        
+        self.main_paned.set_start_child(self.file_panel); self.main_paned.set_position(280)
         self.workspace_paned = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
-        self.workspace_paned.set_vexpand(True); self.workspace_paned.set_hexpand(True)
-        self.workspace_paned.set_shrink_start_child(False); self.workspace_paned.set_shrink_end_child(False)
-        self.workspace_paned.set_resize_start_child(True); self.workspace_paned.set_resize_end_child(True)
-        
+        self.workspace_paned.set_vexpand(True); self.workspace_paned.set_hexpand(True); self.workspace_paned.set_shrink_start_child(False); self.workspace_paned.set_shrink_end_child(False); self.workspace_paned.set_resize_start_child(True); self.workspace_paned.set_resize_end_child(True)
         self.content_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
-        self.content_paned.set_shrink_start_child(False); self.content_paned.set_shrink_end_child(False)
-        self.content_paned.set_resize_start_child(True); self.content_paned.set_resize_end_child(False)
+        self.content_paned.set_shrink_start_child(False); self.content_paned.set_shrink_end_child(False); self.content_paned.set_resize_start_child(True); self.content_paned.set_resize_end_child(False)
         self.editor_view = BlockEditorView(self._show_toast, self._run_python_file, get_config_cb=lambda: self.config)
-        self.content_paned.set_start_child(self.editor_view)
-        self.content_paned.set_position(800)
+        self.content_paned.set_start_child(self.editor_view); self.content_paned.set_position(800)
         self.terminal_panel = TerminalPanel(get_project_root=lambda: self.project_root, get_config=lambda: self.config, show_toast=self._show_toast)
         self.control_panel = ControlPanel(get_project_root=lambda: self.project_root, get_config=lambda: self.config, show_toast=self._show_toast, terminal_panel=self.terminal_panel)
-        self.ctrl_scroll = Gtk.ScrolledWindow(); self.ctrl_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self.ctrl_scroll.set_hexpand(True); self.ctrl_scroll.set_vexpand(True); self.ctrl_scroll.set_child(self.control_panel)
+        self.ctrl_scroll = Gtk.ScrolledWindow(); self.ctrl_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC); self.ctrl_scroll.set_hexpand(True); self.ctrl_scroll.set_vexpand(True); self.ctrl_scroll.set_child(self.control_panel)
         self.content_paned.set_end_child(self.ctrl_scroll)
-        
-        self.workspace_paned.set_start_child(self.content_paned)
-        self.workspace_paned.set_end_child(self.terminal_panel)
-        self.workspace_paned.set_position(600)
+        self.workspace_paned.set_start_child(self.content_paned); self.workspace_paned.set_end_child(self.terminal_panel); self.workspace_paned.set_position(600)
         self.main_paned.set_end_child(self.workspace_paned)
         main_box.append(self.main_paned)
         self.toast_overlay.set_child(main_box); self.win.set_content(self.toast_overlay)
@@ -1471,36 +1940,23 @@ class GykhamineStudioApp(Adw.Application):
     def _toggle_left_panel(self, *_):
         self.left_visible = not self.left_visible
         if self.left_visible:
-            self.file_panel.set_visible(True)
-            GLib.idle_add(lambda: self.main_paned.set_position(self._left_pos) and False)
-            self.btn_toggle_left.set_label("☰")
+            self.file_panel.set_visible(True); GLib.idle_add(lambda: self.main_paned.set_position(self._left_pos) and False); self.btn_toggle_left.set_label("☰")
         else:
-            self._left_pos = self.main_paned.get_position()
-            self.main_paned.set_position(0)
-            self.btn_toggle_left.set_label("▶")
+            self._left_pos = self.main_paned.get_position(); self.main_paned.set_position(0); self.btn_toggle_left.set_label("▶")
 
     def _toggle_right_panel(self, *_):
         self.right_visible = not self.right_visible
         if self.right_visible:
-            self.content_paned.set_end_child(self.ctrl_scroll)
-            GLib.idle_add(lambda: self.content_paned.set_position(self._right_pos) or False)
-            self.btn_toggle_right.set_label("⚙")
+            self.content_paned.set_end_child(self.ctrl_scroll); GLib.idle_add(lambda: self.content_paned.set_position(self._right_pos) or False); self.btn_toggle_right.set_label("⚙")
         else:
-            self._right_pos = self.content_paned.get_position()
-            self.content_paned.set_end_child(None)
-            self.btn_toggle_right.set_label("◀")
+            self._right_pos = self.content_paned.get_position(); self.content_paned.set_end_child(None); self.btn_toggle_right.set_label("◀")
 
     def _toggle_terminal_panel(self, *_):
         self.terminal_visible = not self.terminal_visible
         if self.terminal_visible:
-            self.terminal_panel.set_visible(True)
-            GLib.idle_add(lambda: self.workspace_paned.set_position(self._terminal_pos) and False)
-            self.btn_toggle_terminal.set_label("🖥")
+            self.terminal_panel.set_visible(True); GLib.idle_add(lambda: self.workspace_paned.set_position(self._terminal_pos) and False); self.btn_toggle_terminal.set_label("🖥")
         else:
-            self._terminal_pos = self.workspace_paned.get_position()
-            self.terminal_panel.set_visible(False)
-            GLib.idle_add(lambda: self.workspace_paned.set_position(10000) and False)
-            self.btn_toggle_terminal.set_label("⌨")
+            self._terminal_pos = self.workspace_paned.get_position(); self.terminal_panel.set_visible(False); GLib.idle_add(lambda: self.workspace_paned.set_position(10000) and False); self.btn_toggle_terminal.set_label("⌨")
 
     def _open_project_dialog(self, *_):
         Gtk.FileDialog(title="Open a project").select_folder(self.win, None, self._on_project_selected)
@@ -1546,10 +2002,8 @@ class GykhamineStudioApp(Adw.Application):
         if self.project_root: self.file_panel.load_project(self.project_root, self.config)
 
     def _apply_theme(self):
-        if self.config.get("theme", "dark") == "light":
-            self.win.add_css_class("theme-light")
-        else:
-            self.win.remove_css_class("theme-light")
+        if self.config.get("theme", "dark") == "light": self.win.add_css_class("theme-light")
+        else: self.win.remove_css_class("theme-light")
 
     def _show_toast(self, msg: str):
         self.toast_overlay.add_toast(Adw.Toast(title=msg, timeout=2))
