@@ -15,6 +15,7 @@ import os, sys, re, subprocess, threading, shutil, json, webbrowser, socket, zip
 from pathlib import Path
 from datetime import datetime
 import time
+
 # ═══════════════════════════════════════════════════════════════════════
 #  GTK4 UTILITIES
 # ═══════════════════════════════════════════════════════════════════════
@@ -226,7 +227,7 @@ def apply_syntax_highlighting(textview, lang):
     
     for tag_name in colors.keys():
         buf.remove_tag_by_name(tag_name, buf.get_start_iter(), buf.get_end_iter())
-        
+    
     patterns = []
     if lang in ("html", "jinja"):
         patterns = [(r'(<!--[\s\S]*?-->)', "comment"), (r'(\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\})', "jinja"), (r'(</?[a-zA-Z0-9:_-]+)', "tag"), (r'\b([a-zA-Z0-9:_-]+)(?=\s*=)', "attr"), (r'("[^"]*"|\'[^\']*\')', "string")]
@@ -240,7 +241,7 @@ def apply_syntax_highlighting(textview, lang):
         patterns = [(r'(//.*|/\*[\s\S]*?\*/)', "comment"), (r'("[^"]*"|\'[^\']*\'|`[^`]*`)', "string"), (r'\b(break|case|catch|class|const|continue|debugger|default|delete|do|else|export|extends|finally|for|function|if|import|in|instanceof|new|return|super|switch|this|throw|try|typeof|var|void|while|with|yield|let|async|await|of)\b', "keyword"), (r'\b\d+\b', "number"), (r'\b[A-Z]\w*\b', "type"), (r'\b[a-zA-Z_]\w*(?=\s*\()', "function"), (r'\b[a-zA-Z_]\w*(?=\s*=)', "variable")]
     elif lang in ("bash", "sh", "pl"):
         patterns = [(r'(#.*)', "comment"), (r'("[^"]*"|\'[^\']*\')', "string"), (r'\b(if|then|else|elif|fi|case|esac|for|while|until|do|done|in|function|return|exit|break|continue|export|source|local)\b', "keyword"), (r'(\$[a-zA-Z_]\w*|\$\{[^}]+\})', "variable"), (r'\b(echo|cd|ls|pwd|grep|awk|sed|chmod|chown|sudo|apt|mkdir|rm|cp|mv|cat|find|curl|wget|python3|pip)\b', "function")]
-        
+    
     for pattern, tag_name in patterns:
         for match in re.finditer(pattern, text):
             buf.apply_tag_by_name(tag_name, buf.get_iter_at_offset(match.start()), buf.get_iter_at_offset(match.end()))
@@ -274,7 +275,7 @@ def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
             current_start = i + 1
             i += 1
             continue
-            
+        
         is_root_block_start = not line.startswith((" ", "\t")) and (
             stripped.startswith("@") or
             re.match(r'^(async\s+)?def\s+\w+', stripped) or
@@ -423,11 +424,9 @@ class NativeTtyTerminal(Gtk.Window):
         self.text_view.set_monospace(True)
         self.text_view.set_wrap_mode(Gtk.WrapMode.NONE)
         self.text_view.add_css_class("terminal-tty-view")
-        
         provider = Gtk.CssProvider()
         provider.load_from_data(b""".terminal-tty-view { background-color: #000000 !important; color: #cccccc; font-family: 'Fira Code', 'Consolas', 'Monaco', monospace; font-size: 14px; padding: 10px; }""")
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        
         self.scrolled.set_child(self.text_view)
         self.buf = self.text_view.get_buffer()
         
@@ -500,6 +499,7 @@ class NativeTtyTerminal(Gtk.Window):
             elif keyval == Gdk.KEY_l: data = b"\x0c"
             elif keyval == Gdk.KEY_u: data = b"\x15"
             elif keyval == Gdk.KEY_w: data = b"\x17"
+        
         if data:
             try: os.write(self.master_fd, data)
             except OSError: self.is_running = False
@@ -834,7 +834,7 @@ class AIModificationDialog(Gtk.Dialog):
         scroll_orig.set_child(self.view_orig)
         box_orig.append(scroll_orig)
         
-        box_new = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box_new = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         box_new.append(Gtk.Label(label="Proposition IA", xalign=0, css_classes=["dim-label"]))
         scroll_new = Gtk.ScrolledWindow()
         scroll_new.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -844,9 +844,19 @@ class AIModificationDialog(Gtk.Dialog):
         self.view_new.set_editable(False)
         self.view_new.set_monospace(True)
         self.view_new.get_buffer().set_text("// En attente de génération...")
-        apply_syntax_highlighting(self.view_new, self._get_lang(block['type']))
+        apply_syntax_highlighting(self.view_new, self._get_lang(self.block['type']))
         scroll_new.set_child(self.view_new)
         box_new.append(scroll_new)
+        
+        # Boutons Conserver / Annuler juste en dessous de la proposition IA
+        bottom_action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10, halign=Gtk.Align.END)
+        btn_reject = Gtk.Button(label="❌ Annuler")
+        btn_reject.connect("clicked", lambda *_: self.destroy())
+        btn_accept = Gtk.Button(label="✅ Conserver", css_classes=["suggested-action"])
+        btn_accept.connect("clicked", self._on_accept)
+        bottom_action_box.append(btn_reject)
+        bottom_action_box.append(btn_accept)
+        box_new.append(bottom_action_box)
         
         paned.set_start_child(box_orig)
         paned.set_end_child(box_new)
@@ -884,18 +894,6 @@ class AIModificationDialog(Gtk.Dialog):
         action_bar.append(generate_box)
         prompt_box.append(action_bar)
         content.append(prompt_box)
-        
-        sep_bottom = Gtk.Separator(margin_top=10, margin_bottom=10)
-        content.append(sep_bottom)
-        
-        bottom_action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10, halign=Gtk.Align.END)
-        btn_reject = Gtk.Button(label="❌ Annuler")
-        btn_reject.connect("clicked", lambda *_: self.destroy())
-        btn_accept = Gtk.Button(label="✅ Conserver", css_classes=["suggested-action"])
-        btn_accept.connect("clicked", self._on_accept)
-        bottom_action_box.append(btn_reject)
-        bottom_action_box.append(btn_accept)
-        content.append(bottom_action_box)
 
     def _open_context_selector(self, *_):
         root = None
@@ -1114,417 +1112,67 @@ class LogAnalyzerDialog(Gtk.Dialog):
             else:
                 GLib.idle_add(lambda: self.txt_result.get_buffer().set_text("❌ Échec de l'analyse IA."))
                 GLib.idle_add(lambda: self.log_callback("❌ Échec de l'analyse IA."))
-                
         threading.Thread(target=_thread, daemon=True).start()
 
-class SmartTerminalBuilderDialog(Gtk.Dialog):
+class AICmdGeneratorDialog(Gtk.Dialog):
     def __init__(self, parent, terminal_panel):
-        super().__init__(title="🛠️ Constructeur de Commandes en Chaîne", transient_for=parent, default_width=800, default_height=700)
+        super().__init__(title="🤖 Générateur de Commandes IA", transient_for=parent, default_width=600, default_height=400)
         self.add_css_class("rounded-dialog")
         self.terminal_panel = terminal_panel
-        self.available_commands = []
-        self.sudo_active = False
+        self.generated_cmd = ""
         
         content = self.get_content_area()
         content.set_spacing(12)
         set_margins(content, 16)
         
-        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        header.append(Gtk.Label(label="Construisez votre commande étape par étape", css_classes=["heading"]))
-        spacer = Gtk.Box(); spacer.set_hexpand(True); header.append(spacer)
-        self.chk_sudo = Gtk.CheckButton(label="Sudo")
-        self.chk_sudo.connect("toggled", self._on_sudo_toggled)
-        header.append(self.chk_sudo)
-        btn_translate = Gtk.Button(label="🗣 NL -> Cmd")
-        btn_translate.add_css_class("suggested-action")
-        btn_translate.connect("clicked", self._open_translator_dialog)
-        header.append(btn_translate)
-        content.append(header)
-        content.append(Gtk.Separator())
-        
-        scroll_chain = Gtk.ScrolledWindow()
-        scroll_chain.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        scroll_chain.set_vexpand(True)
-        self.chain_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        scroll_chain.set_child(self.chain_box)
-        content.append(scroll_chain)
-        
-        btn_add_first = Gtk.Button(label="➕ Ajouter la première commande")
-        btn_add_first.add_css_class("ctrl-btn-start")
-        btn_add_first.connect("clicked", lambda *_: self._add_command_segment())
-        self.chain_box.append(btn_add_first)
-        content.append(Gtk.Separator(margin_top=8, margin_bottom=8))
-        
-        content.append(Gtk.Label(label="Commande générée (Prévisualisation) :", xalign=0, css_classes=["heading"]))
-        preview_scroll = Gtk.ScrolledWindow()
-        preview_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
-        self.lbl_preview = Gtk.Label(label="$ ...", xalign=0, css_classes=["terminal-prompt"])
-        self.lbl_preview.set_hexpand(True)
-        self.lbl_preview.set_selectable(True)
-        preview_scroll.set_child(self.lbl_preview)
-        content.append(preview_scroll)
-        
-        action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, halign=Gtk.Align.END)
-        btn_cancel = Gtk.Button(label="Annuler")
-        btn_cancel.connect("clicked", lambda *_: self.destroy())
-        btn_exec = Gtk.Button(label="▶ Exécuter la commande")
-        btn_exec.add_css_class("ctrl-btn-start")
-        btn_exec.connect("clicked", self._execute_built_command)
-        action_box.append(btn_cancel)
-        action_box.append(btn_exec)
-        content.append(action_box)
-        
-        self._load_commands_async()
-
-    def _load_commands_async(self):
-        def _thread():
-            cmds = set()
-            try:
-                for d in ['/bin', '/sbin', '/usr/bin', '/usr/sbin']:
-                    if Path(d).exists():
-                        for f in Path(d).iterdir():
-                            if f.is_file() and os.access(f, os.X_OK):
-                                cmds.add(f.name)
-            except: pass
-            GLib.idle_add(self._update_command_list, sorted(list(cmds)))
-        threading.Thread(target=_thread, daemon=True).start()
-
-    def _update_command_list(self, cmds):
-        self.available_commands = cmds
-
-    def _add_command_segment(self):
-        first_child = self.chain_box.get_first_child()
-        if isinstance(first_child, Gtk.Button) and first_child.get_label() == "➕ Ajouter la première commande":
-            self.chain_box.remove(first_child)
-            
-        segment_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        segment_box.add_css_class("ctrl-btn")
-        
-        # 1. Commande
-        cmd_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        cmd_row.append(Gtk.Label(label="Commande :", width_request=80, xalign=0))
-        combo_cmd = Gtk.ComboBoxText()
-        combo_cmd.set_hexpand(True)
-        for c in self.available_commands:
-            combo_cmd.append_text(c)
-        combo_cmd.set_active(-1)
-        cmd_row.append(combo_cmd)
-        segment_box.append(cmd_row)
-        
-        # 2. Options (No-code)
-        opt_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        opt_row.append(Gtk.Label(label="Options :", width_request=80, xalign=0))
-        opts_container = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        opts_container.set_hexpand(True)
-        opts_container.add_css_class("options-container")
-        opt_row.append(opts_container)
-        
-        btn_add_opt = Gtk.Button(label="➕ Option")
-        btn_add_opt.add_css_class("ctrl-btn-small")
-        btn_add_opt.connect("clicked", lambda *_: self._show_options_popover(combo_cmd, opts_container))
-        opt_row.append(btn_add_opt)
-        segment_box.append(opt_row)
-        
-        # 3. Arguments (Saisie manuelle)
-        arg_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        arg_row.append(Gtk.Label(label="Arguments :", width_request=80, xalign=0))
-        args_container = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        args_container.set_hexpand(True)
-        args_container.add_css_class("args-container")
-        arg_row.append(args_container)
-        
-        btn_add_arg = Gtk.Button(label="➕ Argument")
-        btn_add_arg.add_css_class("ctrl-btn-small")
-        btn_add_arg.connect("clicked", lambda *_: self._show_add_argument_dialog(args_container))
-        arg_row.append(btn_add_arg)
-        segment_box.append(arg_row)
-        
-        self.chain_box.append(segment_box)
-        self._update_preview()
-        
-        # 4. Operator + Next Command
-        op_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, margin_start=40)
-        combo_op = Gtk.ComboBoxText()
-        for op in ['&&', '||', '|', ';', '>', '>>']:
-            combo_op.append_text(op)
-        combo_op.set_active(0)
-        combo_op.connect("changed", lambda *_: self._update_preview())
-        op_box.append(combo_op)
-        
-        btn_next = Gtk.Button(label="➕ Ajouter la commande suivante")
-        btn_next.add_css_class("ctrl-btn-small")
-        btn_next.connect("clicked", lambda *_: self._add_command_segment())
-        op_box.append(btn_next)
-        
-        self.chain_box.append(op_box)
-        
-        def on_cmd_changed(*_):
-            self._update_preview()
-            # Clear options and args when command changes
-            while child := opts_container.get_first_child():
-                opts_container.remove(child)
-            while child := args_container.get_first_child():
-                args_container.remove(child)
-                
-        combo_cmd.connect("changed", on_cmd_changed)
-
-    def _show_options_popover(self, combo_cmd, opts_container):
-        cmd = combo_cmd.get_active_text()
-        if not cmd:
-            return
-            
-        popover = Gtk.Popover()
-        popover.set_parent(combo_cmd)
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroll.set_size_request(250, 300)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        box.set_margin_start(8)
-        box.set_margin_end(8)
-        box.set_margin_top(8)
-        box.set_margin_bottom(8)
-        
-        lbl = Gtk.Label(label=f"Options pour '{cmd}'", css_classes=["heading"], xalign=0, margin_bottom=8)
-        box.append(lbl)
-        
-        def _fetch():
-            options = []
-            try:
-                proc = subprocess.run([cmd, "--help"], capture_output=True, text=True, timeout=3)
-                text = proc.stdout + proc.stderr
-                if text:
-                    for line in text.split('\n'):
-                        line = line.strip()
-                        if line.startswith('-') or line.startswith('--'):
-                            parts = line.split()
-                            if parts:
-                                opt = parts[0].rstrip(',').rstrip(':')
-                                if opt not in options and len(opt) > 1:
-                                    options.append(opt)
-                
-                if len(options) < 3:
-                    proc_man = subprocess.run(["man", cmd], capture_output=True, text=True, timeout=5)
-                    if proc_man.returncode == 0:
-                        for line in proc_man.stdout.split('\n'):
-                            match = re.search(r'^\s+(-[a-zA-Z0-9\-]+|--[a-zA-Z0-9\-]+)', line)
-                            if match:
-                                opt = match.group(1)
-                                if opt not in options:
-                                    options.append(opt)
-                                if len(options) >= 40:
-                                    break
-            except Exception:
-                pass
-            
-            GLib.idle_add(lambda: self._populate_options_list(options, box, opts_container, popover))
-            
-        threading.Thread(target=_fetch, daemon=True).start()
-        scroll.set_child(box)
-        popover.set_child(scroll)
-        popover.popup()
-
-    def _populate_options_list(self, options, box, opts_container, popover):
-        if not options:
-            lbl = Gtk.Label(label="Aucune option trouvée", css_classes=["dim-label"])
-            box.append(lbl)
-            return
-            
-        for opt in options:
-            btn = Gtk.Button(label=opt)
-            btn.set_halign(Gtk.Align.FILL)
-            btn.add_css_class("flat")
-            
-            def on_opt_clicked(b, o=opt):
-                # Check if already added
-                child = opts_container.get_first_child()
-                while child:
-                    if hasattr(child, '_opt_val') and child._opt_val == o:
-                        return # Already exists
-                    child = child.get_next_sibling()
-                
-                # Add tag
-                tag_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
-                tag_box._opt_val = o
-                tag_lbl = Gtk.Label(label=o, css_classes=["option-tag"])
-                tag_box.append(tag_lbl)
-                
-                btn_remove = Gtk.Button(label="✕")
-                btn_remove.add_css_class("flat")
-                btn_remove.add_css_class("destructive-action")
-                btn_remove.set_margin_start(4)
-                btn_remove.connect("clicked", lambda *_: (opts_container.remove(tag_box), self._update_preview()))
-                tag_box.append(btn_remove)
-                
-                opts_container.append(tag_box)
-                popover.popdown()
-                self._update_preview()
-                
-            btn.connect("clicked", on_opt_clicked)
-            box.append(btn)
-
-    def _show_add_argument_dialog(self, args_container):
-        dialog = Gtk.Dialog(title="Ajouter un argument", transient_for=self.get_root())
-        dialog.add_css_class("rounded-dialog")
-        dialog.set_default_size(350, 150)
-        content = dialog.get_content_area()
-        content.set_spacing(10)
-        set_margins(content, 16)
-        
-        content.append(Gtk.Label(label="Saisissez la valeur de l'argument :", xalign=0))
-        entry = Gtk.Entry()
-        entry.set_placeholder_text("ex: fichier.txt, /chemin/, 8080")
-        content.append(entry)
-        
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, halign=Gtk.Align.END, margin_top=12)
-        btn_cancel = Gtk.Button(label="Annuler")
-        btn_add = Gtk.Button(label="✅ Ajouter", css_classes=["suggested-action"])
-        btn_box.append(btn_cancel)
-        btn_box.append(btn_add)
-        content.append(btn_box)
-        
-        def on_add(*_):
-            val = entry.get_text().strip()
-            if not val:
-                dialog.destroy()
-                return
-                
-            tag_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
-            tag_box._arg_val = val
-            tag_lbl = Gtk.Label(label=val, css_classes=["arg-tag"])
-            tag_box.append(tag_lbl)
-            
-            btn_remove = Gtk.Button(label="✕")
-            btn_remove.add_css_class("flat")
-            btn_remove.add_css_class("destructive-action")
-            btn_remove.set_margin_start(4)
-            btn_remove.connect("clicked", lambda *_: (args_container.remove(tag_box), self._update_preview()))
-            tag_box.append(btn_remove)
-            
-            args_container.append(tag_box)
-            dialog.destroy()
-            self._update_preview()
-            
-        btn_add.connect("clicked", on_add)
-        btn_cancel.connect("clicked", lambda *_: dialog.destroy())
-        entry.connect("activate", on_add)
-        dialog.present()
-
-    def _on_sudo_toggled(self, *_):
-        self.sudo_active = self.chk_sudo.get_active()
-        self._update_preview()
-
-    def _update_preview(self):
-        final_cmd = self._rebuild_chain()
-        if final_cmd:
-            self.lbl_preview.set_text(f"$ {final_cmd}")
-            self.final_command_string = final_cmd
-        else:
-            self.lbl_preview.set_text("$ ...")
-            self.final_command_string = ""
-
-    def _rebuild_chain(self):
-        cmd_str_parts = []
-        if self.sudo_active:
-            cmd_str_parts.append("sudo")
-            
-        current_cmd_parts = []
-        current_op = ""
-        
-        child = self.chain_box.get_first_child()
-        while child:
-            if isinstance(child, Gtk.Box):
-                first_widget = child.get_first_child()
-                if isinstance(first_widget, Gtk.Label) and first_widget.get_label() == "Commande :":
-                    if current_cmd_parts:
-                        cmd_str_parts.append(" ".join(current_cmd_parts))
-                    if current_op:
-                        cmd_str_parts.append(current_op)
-                    current_cmd_parts = []
-                    current_op = ""
-                    
-                    combo = first_widget.get_next_sibling()
-                    cmd = combo.get_active_text() or ""
-                    
-                    opt_row = child.get_first_child().get_next_sibling()
-                    opts_container = opt_row.get_first_child().get_next_sibling()
-                    opts = []
-                    opt_child = opts_container.get_first_child()
-                    while opt_child:
-                        if hasattr(opt_child, '_opt_val'):
-                            opts.append(opt_child._opt_val)
-                        opt_child = opt_child.get_next_sibling()
-                        
-                    arg_row = opt_row.get_next_sibling()
-                    args_container = arg_row.get_first_child().get_next_sibling()
-                    args = []
-                    arg_child = args_container.get_first_child()
-                    while arg_child:
-                        if hasattr(arg_child, '_arg_val'):
-                            args.append(arg_child._arg_val)
-                        arg_child = arg_child.get_next_sibling()
-                        
-                    if cmd:
-                        current_cmd_parts.append(cmd)
-                        current_cmd_parts.extend(opts)
-                        current_cmd_parts.extend(args)
-                        
-                elif isinstance(first_widget, Gtk.Label) and first_widget.get_label().startswith("➕"):
-                    combo = first_widget.get_first_child()
-                    current_op = combo.get_active_text()
-                    
-            child = child.get_next_sibling()
-            
-        if current_cmd_parts:
-            cmd_str_parts.append(" ".join(current_cmd_parts))
-            
-        return " ".join(cmd_str_parts)
-
-    def _execute_built_command(self, *_):
-        if hasattr(self, 'final_command_string') and self.final_command_string:
-            self.terminal_panel._run_custom_command_text(self.final_command_string)
-            self.destroy()
-
-    def _open_translator_dialog(self, *_):
-        dialog = Gtk.Dialog(title="🗣 Traducteur NL -> Terminal", transient_for=self.get_root())
-        dialog.add_css_class("rounded-dialog")
-        dialog.set_default_size(500, 300)
-        content = dialog.get_content_area()
-        content.set_spacing(10)
-        set_margins(content, 16)
-        
-        content.append(Gtk.Label(label="Décrivez l'action en langage naturel :", xalign=0))
-        txt_input = Gtk.TextView(); txt_input.set_wrap_mode(Gtk.WrapMode.WORD)
-        scroll_in = Gtk.ScrolledWindow(); scroll_in.set_size_request(-1, 100); scroll_in.set_child(txt_input)
+        content.append(Gtk.Label(label="Décrivez l'action en langage naturel :", xalign=0, css_classes=["heading"]))
+        scroll_in = Gtk.ScrolledWindow()
+        scroll_in.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll_in.set_size_request(-1, 100)
+        self.txt_input = Gtk.TextView()
+        self.txt_input.set_wrap_mode(Gtk.WrapMode.WORD)
+        scroll_in.set_child(self.txt_input)
         content.append(scroll_in)
         
-        btn_translate = Gtk.Button(label="🔄 Générer Commande"); btn_translate.add_css_class("suggested-action")
+        btn_translate = Gtk.Button(label="🔄 Générer Commande")
+        btn_translate.add_css_class("suggested-action")
+        btn_translate.connect("clicked", self._on_translate)
         content.append(btn_translate)
         
-        lbl_result = Gtk.Label(label="", xalign=0, css_classes=["terminal-prompt"])
-        content.append(lbl_result)
+        content.append(Gtk.Label(label="Commande générée :", xalign=0, css_classes=["heading"], margin_top=8))
+        self.lbl_result = Gtk.Label(label="$ ...", xalign=0, css_classes=["terminal-prompt"])
+        self.lbl_result.set_selectable(True)
+        content.append(self.lbl_result)
         
-        btn_use = Gtk.Button(label="✅ Utiliser cette commande"); btn_use.set_sensitive(False)
-        btn_use.add_css_class("ctrl-btn-start")
-        content.append(btn_use)
+        action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, halign=Gtk.Align.END, margin_top=12)
+        btn_cancel = Gtk.Button(label="Annuler")
+        btn_cancel.connect("clicked", lambda *_: self.destroy())
+        self.btn_exec = Gtk.Button(label="▶ Exécuter")
+        self.btn_exec.add_css_class("ctrl-btn-start")
+        self.btn_exec.set_sensitive(False)
+        self.btn_exec.connect("clicked", self._on_execute)
+        action_box.append(btn_cancel)
+        action_box.append(self.btn_exec)
+        content.append(action_box)
+
+    def _on_translate(self, *_):
+        intent = self.txt_input.get_buffer().get_text(self.txt_input.get_buffer().get_start_iter(), self.txt_input.get_buffer().get_end_iter(), True).strip()
+        if not intent: return
+        self.lbl_result.set_text("Génération en cours...")
+        self.btn_exec.set_sensitive(False)
         
-        def on_translate(*_):
-            intent = txt_input.get_buffer().get_text(txt_input.get_buffer().get_start_iter(), txt_input.get_buffer().get_end_iter(), True).strip()
-            if not intent: return
-            lbl_result.set_text("Génération en cours...")
-            def _thread():
-                cmd = self.terminal_panel.ai_engine.process_modification("shell", "", intent, mode="terminal_gen")
-                GLib.idle_add(lambda: (lbl_result.set_text(f"$ {cmd}"), btn_use.set_sensitive(True), setattr(dialog, '_generated_cmd', cmd)))
-            threading.Thread(target=_thread, daemon=True).start()
-            
-        def on_use(*_):
-            if hasattr(dialog, '_generated_cmd'):
-                cmd = dialog._generated_cmd
-                self.terminal_panel._run_custom_command_text(cmd)
-                dialog.destroy()
-                
-        btn_translate.connect("clicked", on_translate)
-        btn_use.connect("clicked", on_use)
-        dialog.present()
+        def _thread():
+            cmd = self.terminal_panel.ai_engine.process_modification("shell", "", intent, mode="terminal_gen")
+            if cmd:
+                GLib.idle_add(lambda: (self.lbl_result.set_text(f"$ {cmd}"), self.btn_exec.set_sensitive(True), setattr(self, 'generated_cmd', cmd)))
+            else:
+                GLib.idle_add(lambda: (self.lbl_result.set_text("❌ Échec de la génération."), self.btn_exec.set_sensitive(False)))
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _on_execute(self, *_):
+        if hasattr(self, 'generated_cmd') and self.generated_cmd:
+            self.terminal_panel._run_custom_command_text(self.generated_cmd)
+            self.destroy()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  WIDGETS
@@ -1547,6 +1195,7 @@ class BlockCard(Gtk.Box):
         if self.block["type"] == "style": self.lang = "css"
         elif self.block["type"] == "script": self.lang = "js"
         elif self.block["type"] in ("django_block", "template_part"): self.lang = "jinja"
+        
         self._build_header()
         self._build_editor()
 
@@ -1556,6 +1205,7 @@ class BlockCard(Gtk.Box):
         header.append(Gtk.Label(label=TYPE_ICONS.get(self.block["type"], "▪"), css_classes=["block-icon"]))
         badge = Gtk.Label(label=self.block["type"].upper()); badge.add_css_class("block-badge"); badge.add_css_class(f"badge-{self.block['type']}"); header.append(badge)
         lbl_name = Gtk.Label(label=self.block["name"]); lbl_name.set_ellipsize(Pango.EllipsizeMode.END); lbl_name.set_hexpand(True); lbl_name.set_xalign(0); lbl_name.set_max_width_chars(40); lbl_name.add_css_class("block-name"); header.append(lbl_name)
+        
         if self.ai_engine:
             btn_ai = Gtk.Button(label="🤖 IA")
             btn_ai.set_tooltip_text("Modifier ce bloc avec l'IA")
@@ -1563,6 +1213,7 @@ class BlockCard(Gtk.Box):
             btn_ai.add_css_class("btn-ai")
             btn_ai.connect("clicked", self._open_ai_dialog)
             header.append(btn_ai)
+            
         for label, tooltip, cb, css in [("👁", "View / Edit", self._view_code, "btn-view"), ("✏", "Inline Edit", self._toggle_edit, "btn-edit"), ("⧉", "Copy", self._do_copy, "btn-copy"), ("✕", "Delete", self._do_delete, "btn-delete")]:
             btn = Gtk.Button(label=label); btn.set_tooltip_text(tooltip); btn.add_css_class("block-action-btn"); btn.add_css_class(css); btn.connect("clicked", cb); header.append(btn)
         self.append(header)
@@ -1611,7 +1262,6 @@ class BlockCard(Gtk.Box):
         self.on_save_cb(self.block, self.block["code"]); self._toggle_edit()
 
     def _do_copy(self, *_): Gdk.Display.get_default().get_clipboard().set(self.block["code"])
-
     def _do_delete(self, *_): self.on_delete_cb(self.block)
 
     def _open_ai_dialog(self, *_):
@@ -1675,7 +1325,6 @@ class FilePanel(Gtk.Box):
             self.watcher.start()
 
     def _refresh_tree_idle(self): GLib.idle_add(self._refresh_tree)
-
     def _refresh_tree(self):
         if self.project_root: self._populate_tree(self.project_root, None)
 
@@ -1852,17 +1501,14 @@ class TerminalPanel(Gtk.Box):
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8); header.set_margin_start(8); header.set_margin_end(8); header.set_margin_top(4); header.set_margin_bottom(4)
         header.append(Gtk.Label(label="🖥 Terminal Log", css_classes=["terminal-title"]))
         spacer = Gtk.Box(); spacer.set_hexpand(True); header.append(spacer)
-        
         btn_analyze = Gtk.Button(label="🔍 Analyseur Logs IA")
         btn_analyze.add_css_class("ctrl-btn-small")
         btn_analyze.connect("clicked", lambda *_: self._open_log_analyzer())
         header.append(btn_analyze)
-        
-        btn_build = Gtk.Button(label="🛠️ Constructeur Cmd")
-        btn_build.add_css_class("ctrl-btn-small")
-        btn_build.connect("clicked", lambda *_: self._open_cmd_builder())
-        header.append(btn_build)
-        
+        btn_gen_cmd = Gtk.Button(label="🤖 Générer Cmd IA")
+        btn_gen_cmd.add_css_class("ctrl-btn-small")
+        btn_gen_cmd.connect("clicked", lambda *_: self._open_ai_cmd_generator())
+        header.append(btn_gen_cmd)
         btn_clear = Gtk.Button(label="🗑 Clear"); btn_clear.add_css_class("ctrl-btn-small"); btn_clear.connect("clicked", lambda *_: self.log_view.get_buffer().set_text(""))
         header.append(btn_clear); self.append(header); self.append(Gtk.Separator())
         
@@ -1881,8 +1527,8 @@ class TerminalPanel(Gtk.Box):
         dialog = LogAnalyzerDialog(self.get_root(), self.ai_engine, self._log)
         dialog.present()
 
-    def _open_cmd_builder(self, *_):
-        dialog = SmartTerminalBuilderDialog(self.get_root(), self)
+    def _open_ai_cmd_generator(self, *_):
+        dialog = AICmdGeneratorDialog(self.get_root(), self)
         dialog.present()
 
     def _log(self, text: str):
@@ -2044,18 +1690,37 @@ class ControlPanel(Gtk.Box):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self._status_dots = getattr(self, "_status_dots", {})
         dot = Gtk.Label(label="⬤"); dot.add_css_class("status-dot-off"); self._status_dots[name] = dot
-        btn_start = Gtk.Button(label=label); btn_start.add_css_class("ctrl-btn-start"); btn_start.set_hexpand(True); btn_start.connect("clicked", start_cb)
-        btn_stop = Gtk.Button(label="⏹"); btn_stop.add_css_class("ctrl-btn-stop"); btn_stop.connect("clicked", stop_cb)
+        
+        # Correction : S'assurer que les callbacks sont bien connectés proprement
+        btn_start = Gtk.Button(label=label)
+        btn_start.add_css_class("ctrl-btn-start")
+        btn_start.set_hexpand(True)
+        btn_start.connect("clicked", start_cb)
+        
+        btn_stop = Gtk.Button(label="⏹")
+        btn_stop.add_css_class("ctrl-btn-stop")
+        # On utilise une lambda pour garantir que c'est callable et éviter les erreurs de résolution immédiate
+        btn_stop.connect("clicked", lambda *_: stop_cb()) 
+        
         row.append(dot); row.append(btn_start); row.append(btn_stop); self.append(row)
-
     def _add_custom_service_row(self, name, label, start_cb, stop_cb):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self._status_dots = getattr(self, "_status_dots", {})
         dot = Gtk.Label(label="⬤"); dot.add_css_class("status-dot-off"); self._status_dots[name] = dot
-        btn_start = Gtk.Button(label=label); btn_start.add_css_class("ctrl-btn-start"); btn_start.set_hexpand(True); btn_start.connect("clicked", start_cb)
-        btn_stop = Gtk.Button(label="⏹ Arrêter"); btn_stop.add_css_class("ctrl-btn-stop"); btn_stop.set_hexpand(True); btn_stop.connect("clicked", stop_cb)
+        
+        btn_start = Gtk.Button(label=label)
+        btn_start.add_css_class("ctrl-btn-start")
+        btn_start.set_hexpand(True)
+        btn_start.connect("clicked", start_cb)
+        
+        btn_stop = Gtk.Button(label="⏹ Arrêter")
+        btn_stop.add_css_class("ctrl-btn-stop")
+        btn_stop.set_hexpand(True)
+        # Correction ici aussi
+        btn_stop.connect("clicked", lambda *_: stop_cb())
+        
         row.append(dot); row.append(btn_start); row.append(btn_stop); self.append(row)
-
+        
     def _set_dot(self, name, running: bool):
         dot = self._status_dots.get(name)
         if dot:
@@ -2211,7 +1876,7 @@ class ControlPanel(Gtk.Box):
             proc = self.processes.get(name)
             if proc: proc.terminate(); self.terminal._log(f"⏹ {name} stopped.")
             else: self.terminal._log(f"⚠ {name} is not running.")
-        return _stop
+            return _stop
 
     def _stop_all_services(self, *_):
         for name in list(self.processes.keys()):
@@ -3237,7 +2902,6 @@ print(json.dumps(result, default=str))
         self._run_cmd(["sudo", sys.executable, str(gy_path)] if sudo else [sys.executable, str(gy_path)], cwd=str(gy_path.parent), name=f"gy_{rel_path}")
 
     def _open_browser(self, *_): self._open_browser_url("http://localhost:8000")
-
     def _open_browser_url(self, url):
         user = os.environ.get("SUDO_USER", "gykhamine")
         self.terminal._log(f"🌐 Ouverture de {url} en tant que {user}...")
@@ -3322,7 +2986,6 @@ class CCompilerDialog(Gtk.Dialog):
         btn_optimize.add_css_class("ctrl-btn-warn")
         btn_optimize.connect("clicked", self._on_optimize_cpp)
         header_box.append(btn_optimize)
-        
         content.append(header_box)
         content.append(Gtk.Separator())
         
@@ -3466,7 +3129,6 @@ class BlockEditorView(Gtk.Box):
         
         self.file_label = Gtk.Label(label="Select a file"); self.file_label.add_css_class("editor-file-label"); self.file_label.set_xalign(0)
         set_margins(self.file_label, 12); self.append(self.file_label); self.append(Gtk.Separator())
-        
         self._build_toolbar()
         
         self.scroll = Gtk.ScrolledWindow(); self.scroll.set_vexpand(True); self.scroll.set_hexpand(True); self.scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -3518,9 +3180,9 @@ class BlockEditorView(Gtk.Box):
                 while child := self.blocks_box.get_first_child(): self.blocks_box.remove(child)
                 self._cards = []
                 self.blocks = []
-            if self.open_tabs:
-                next_path = list(self.open_tabs.keys())[0]
-                self._activate_tab(next_path)
+                if self.open_tabs:
+                    next_path = list(self.open_tabs.keys())[0]
+                    self._activate_tab(next_path)
 
     def _add_block_dialog(self, *_):
         if not self.current_file: return self.toast_cb("❌ No file open")
@@ -3861,9 +3523,12 @@ class GykhamineStudioApp(Adw.Application):
     def _on_activate(self, app):
         provider = Gtk.CssProvider(); provider.load_from_data(CSS.encode())
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        
         self.win = Adw.ApplicationWindow(application=app); self.win.set_title("Gykhamine Studio");
         self.win.set_default_size(1600, 950)
+        
         self.toast_overlay = Adw.ToastOverlay(); main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        
         header = Adw.HeaderBar()
         logo_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         if LOGO_PATH.exists():
@@ -3876,22 +3541,28 @@ class GykhamineStudioApp(Adw.Application):
         else: logo_box.append(Gtk.Label(label="GYKHAMINE", css_classes=["heading"]))
         logo_box.append(Gtk.Label(label="GYKHAMINE STUDIO", css_classes=["heading"]))
         header.set_title_widget(logo_box)
+        
         self.btn_toggle_left = Gtk.Button(label="☰"); self.btn_toggle_left.set_tooltip_text("Show/Hide explorer"); self.btn_toggle_left.connect("clicked", self._toggle_left_panel); header.pack_start(self.btn_toggle_left)
         btn_open = Gtk.Button(label="📂 Open"); btn_open.add_css_class("suggested-action"); btn_open.connect("clicked", self._open_project_dialog); header.pack_start(btn_open)
         self.btn_toggle_terminal = Gtk.Button(label="🖥"); self.btn_toggle_terminal.set_tooltip_text("Show/Hide terminal"); self.btn_toggle_terminal.connect("clicked", self._toggle_terminal_panel); header.pack_end(self.btn_toggle_terminal)
         btn_fullscreen = Gtk.Button(label="⛶"); btn_fullscreen.set_tooltip_text("Fullscreen"); btn_fullscreen.connect("clicked", self._toggle_fullscreen); header.pack_end(btn_fullscreen)
         self.btn_toggle_right = Gtk.Button(label="⚙"); self.btn_toggle_right.set_tooltip_text("Show/Hide control panel"); self.btn_toggle_right.connect("clicked", self._toggle_right_panel); header.pack_end(self.btn_toggle_right)
         btn_settings = Gtk.Button(icon_name="preferences-system-symbolic"); btn_settings.set_tooltip_text("Settings"); btn_settings.connect("clicked", self._open_settings); header.pack_end(btn_settings)
+        
         main_box.append(header)
+        
         self.main_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self.main_paned.set_vexpand(True); self.main_paned.set_hexpand(True); self.main_paned.set_shrink_start_child(True); self.main_paned.set_shrink_end_child(False); self.main_paned.set_resize_start_child(True); self.main_paned.set_resize_end_child(True)
         self.file_panel = FilePanel(self._on_file_selected, self._load_project, self._on_file_created, self._on_file_imported)
         self.main_paned.set_start_child(self.file_panel);
         self.main_paned.set_position(320)
+        
         self.workspace_paned = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
         self.workspace_paned.set_vexpand(True); self.workspace_paned.set_hexpand(True); self.workspace_paned.set_shrink_start_child(False); self.workspace_paned.set_shrink_end_child(False); self.workspace_paned.set_resize_start_child(True); self.workspace_paned.set_resize_end_child(True)
+        
         self.content_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self.content_paned.set_shrink_start_child(False); self.content_paned.set_shrink_end_child(False); self.content_paned.set_resize_start_child(True); self.content_paned.set_resize_end_child(False)
+        
         self.ai_engine = BlockAIEngine(
             config_getter=lambda: self.config,
             log_callback=lambda msg: self.terminal_panel._log(msg)
@@ -3903,20 +3574,27 @@ class GykhamineStudioApp(Adw.Application):
             ai_engine=self.ai_engine
         )
         self.content_paned.set_start_child(self.editor_view); self.content_paned.set_position(800)
+        
         self.terminal_panel = TerminalPanel(get_project_root=lambda: self.project_root, get_config=lambda: self.config, show_toast=self._show_toast)
         self.control_panel = ControlPanel(get_project_root=lambda: self.project_root, get_config=lambda: self.config, show_toast=self._show_toast, terminal_panel=self.terminal_panel)
+        
         self.ctrl_scroll = Gtk.ScrolledWindow(); self.ctrl_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC); self.ctrl_scroll.set_hexpand(True); self.ctrl_scroll.set_vexpand(True); self.ctrl_scroll.set_child(self.control_panel)
         self.content_paned.set_end_child(self.ctrl_scroll)
+        
         self.workspace_paned.set_start_child(self.content_paned); self.workspace_paned.set_end_child(self.terminal_panel); self.workspace_paned.set_position(600)
         self.main_paned.set_end_child(self.workspace_paned)
+        
         main_box.append(self.main_paned)
         self.toast_overlay.set_child(main_box); self.win.set_content(self.toast_overlay)
+        
         self._apply_theme()
         self.left_visible, self.right_visible, self.terminal_visible = True, True, True
         self._left_pos, self._right_pos, self._terminal_pos = 320, 800, 600
+        
         last = self.config.get("last_project", "")
         if last and Path(last).exists(): self._load_project(Path(last))
         elif len(sys.argv) > 1 and Path(sys.argv[1]).exists(): self._load_project(Path(sys.argv[1]))
+        
         self.win.present()
 
     def _toggle_fullscreen(self, *_):
@@ -3961,9 +3639,7 @@ class GykhamineStudioApp(Adw.Application):
         self._show_toast(f"📂 Project opened: {path.name}")
 
     def _on_file_selected(self, path: Path): self.editor_view.load_file(path)
-
     def _on_file_created(self, path: Path): self._show_toast(f"✅ Created: {path.name}"); self.editor_view.load_file(path)
-
     def _on_file_imported(self, path: Path): self._show_toast(f"📥 Imported: {path.name}"); self.editor_view.load_file(path)
 
     def _run_python_file(self, path: Path):
