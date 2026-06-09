@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════╗
-║           GYKHAMINE STUDIO — v3.0.3 (UI/UX Update)       ║
+║           GYKHAMINE STUDIO — v3.2.0 (AI & Terminal Update) ║
 ║     No-code visual editor for Gykhamine capsules         ║
-║     Developed for the GCI project — Brazzaville, Congo   ║
-╚══════════════════════════════════════════════════════════╝
+║     Developed for the GCI project — Brazzaville, Congo   ╚══════════════════════════════════════════════════════════╝
 Dependencies : python3-gi, gtk4, libadwaita-1, zipfile, pandas, openpyxl, requests
 Launch       : python3 gy.py
 """
@@ -16,7 +15,6 @@ import os, sys, re, subprocess, threading, shutil, json, webbrowser, socket, zip
 from pathlib import Path
 from datetime import datetime
 import time
-
 # ═══════════════════════════════════════════════════════════════════════
 #  GTK4 UTILITIES
 # ═══════════════════════════════════════════════════════════════════════
@@ -30,7 +28,7 @@ def set_margins(widget, val):
 #  GLOBAL CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════
 APP_ID   = "org.gykhamine.studio"
-VERSION  = "3.0.3"
+VERSION  = "3.2.0"
 SCRIPT_DIR = Path(__file__).parent.resolve()
 LOGO_PATH  = SCRIPT_DIR / "logo.png"
 DB_PATH    = Path.home() / ".config" / "gykhamine_studio.db"
@@ -43,7 +41,7 @@ DEFAULT_CONFIG = {
     "last_project":      "",
     "last_projects":     [],
     "theme":             "dark",
-    "open_browser_on_run": False, # Désactivé par défaut
+    "open_browser_on_run": False,
     "auto_find_free_port": True,
     "default_port_range_start": 8000,
     "default_port_range_end": 8010,
@@ -228,7 +226,7 @@ def apply_syntax_highlighting(textview, lang):
     
     for tag_name in colors.keys():
         buf.remove_tag_by_name(tag_name, buf.get_start_iter(), buf.get_end_iter())
-    
+        
     patterns = []
     if lang in ("html", "jinja"):
         patterns = [(r'(<!--[\s\S]*?-->)', "comment"), (r'(\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\})', "jinja"), (r'(</?[a-zA-Z0-9:_-]+)', "tag"), (r'\b([a-zA-Z0-9:_-]+)(?=\s*=)', "attr"), (r'("[^"]*"|\'[^\']*\')', "string")]
@@ -242,7 +240,7 @@ def apply_syntax_highlighting(textview, lang):
         patterns = [(r'(//.*|/\*[\s\S]*?\*/)', "comment"), (r'("[^"]*"|\'[^\']*\'|`[^`]*`)', "string"), (r'\b(break|case|catch|class|const|continue|debugger|default|delete|do|else|export|extends|finally|for|function|if|import|in|instanceof|new|return|super|switch|this|throw|try|typeof|var|void|while|with|yield|let|async|await|of)\b', "keyword"), (r'\b\d+\b', "number"), (r'\b[A-Z]\w*\b', "type"), (r'\b[a-zA-Z_]\w*(?=\s*\()', "function"), (r'\b[a-zA-Z_]\w*(?=\s*=)', "variable")]
     elif lang in ("bash", "sh", "pl"):
         patterns = [(r'(#.*)', "comment"), (r'("[^"]*"|\'[^\']*\')', "string"), (r'\b(if|then|else|elif|fi|case|esac|for|while|until|do|done|in|function|return|exit|break|continue|export|source|local)\b', "keyword"), (r'(\$[a-zA-Z_]\w*|\$\{[^}]+\})', "variable"), (r'\b(echo|cd|ls|pwd|grep|awk|sed|chmod|chown|sudo|apt|mkdir|rm|cp|mv|cat|find|curl|wget|python3|pip)\b', "function")]
-    
+        
     for pattern, tag_name in patterns:
         for match in re.finditer(pattern, text):
             buf.apply_tag_by_name(tag_name, buf.get_iter_at_offset(match.start()), buf.get_iter_at_offset(match.end()))
@@ -276,7 +274,7 @@ def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
             current_start = i + 1
             i += 1
             continue
-        
+            
         is_root_block_start = not line.startswith((" ", "\t")) and (
             stripped.startswith("@") or
             re.match(r'^(async\s+)?def\s+\w+', stripped) or
@@ -502,7 +500,6 @@ class NativeTtyTerminal(Gtk.Window):
             elif keyval == Gdk.KEY_l: data = b"\x0c"
             elif keyval == Gdk.KEY_u: data = b"\x15"
             elif keyval == Gdk.KEY_w: data = b"\x17"
-        
         if data:
             try: os.write(self.master_fd, data)
             except OSError: self.is_running = False
@@ -573,7 +570,7 @@ class BlockAIEngine:
         self.get_config = config_getter
         self.log = log_callback
 
-    def _build_prompt(self, block_type, current_code, user_intent, context_deps=""):
+    def _build_prompt(self, block_type, current_code, user_intent, context_deps="", mode="modify"):
         roles = {
             "function": "Tu es un expert Python Senior spécialisé en optimisation et clean code.",
             "class": "Tu es un architecte logiciel Python expert en POO.",
@@ -597,10 +594,47 @@ RÈGLE ABSOLUE :
 3. Si tu ne peux pas faire la modification, renvoie le code original inchangé.
 4. Conserve l'indentation originale.
 """
+        if mode == "contextual_modify":
+            format_instruction = """
+RÈGLE ABSOLUE DE CONTEXTE :
+1. Tu dois modifier EXCLUSIVEMENT le "BLOC CIBLE" fourni.
+2. Utilise les "BLOCS DE CONTEXTE" uniquement pour comprendre les dépendances, les types ou la logique globale.
+3. NE CRÉE PAS de nouveau fichier, ni de nouvelle architecture.
+4. NE MODIFIE PAS les blocs de contexte, seulement le bloc cible.
+5. Réponds UNIQUEMENT par le code du bloc cible modifié. Pas de markdown, pas de texte.
+"""
+        elif mode == "cpp_optimize":
+            format_instruction = """
+RÈGLE ABSOLUE D'OPTIMISATION C++ :
+1. Génère DU CODE C++ pur pour l'optimisation de calcul numérique.
+2. Utilise EXCLUSIVEMENT la bibliothèque standard C++ et Eigen3.
+3. AUCUNE autre bibliothèque externe n'est autorisée.
+4. Le code doit être hautement performant (vectorisation, avoidance de copies).
+5. Réponds UNIQUEMENT par le code C++. Pas de markdown, pas de texte.
+"""
+        elif mode == "terminal_gen":
+            format_instruction = """
+RÈGLE ABSOLUE TERMINAL :
+1. Réponds UNIQUEMENT par la commande shell exacte.
+2. Pas d'explication, pas de markdown.
+3. Si la demande est ambiguë, propose la commande la plus sûre et standard.
+"""
+        elif mode == "log_analysis":
+            format_instruction = """
+RÈGLE D'ANALYSE DE LOGS :
+1. Analyse les logs fournis.
+2. Identifie les erreurs critiques.
+3. Explique la cause probable.
+4. Propose une solution concise.
+5. Format de réponse :
+- **Erreur** : [Description]
+- **Cause** : [Explication]
+- **Solution** : [Commande ou action]
+"""
         prompt = f"""{role}
-CONTEXTE :
+CONTEXTE SUPPLÉMENTAIRE (Dépendances/Architecture) :
 {context_deps if context_deps else "Aucune dépendance externe majeure."}
-CODE ACTUEL À MODIFIER :
+CODE ACTUEL À MODIFIER (BLOC CIBLE) :
 {current_code}
 DEMANDE DE L'UTILISATEUR :
 "{user_intent}"
@@ -610,12 +644,12 @@ Modifie le code ci-dessus pour satisfaire la demande tout en respectant les bonn
 """
         return prompt
 
-    def process_modification(self, block_type, current_code, user_intent, context_deps=""):
+    def process_modification(self, block_type, current_code, user_intent, context_deps="", mode="modify"):
         cfg = self.get_config()
         host = cfg.get("llama_host", "127.0.0.1")
         port = cfg.get("llama_port", "8080")
         url = f"http://{host}:{port}/v1/chat/completions"
-        prompt = self._build_prompt(block_type, current_code, user_intent, context_deps)
+        prompt = self._build_prompt(block_type, current_code, user_intent, context_deps, mode=mode)
         payload = {
             "model": "qwen2.5-coder",
             "messages": [
@@ -624,16 +658,16 @@ Modifie le code ci-dessus pour satisfaire la demande tout en respectant les bonn
             ],
             "temperature": 0.2,
             "top_p": 0.9,
-            "max_tokens": 1024,
+            "max_tokens": 2048,
             "stream": False
         }
         try:
-            self.log(f"🤖 Envoi de la requête IA pour '{block_type}'...")
-            response = requests.post(url, json=payload, timeout=60)
+            self.log(f"🤖 Envoi de la requête IA ({mode})...")
+            response = requests.post(url, json=payload, timeout=120)
             if response.status_code == 200:
                 data = response.json()
                 raw_content = data['choices'][0]['message']['content']
-                cleaned_code = self._clean_code_output(raw_content, block_type)
+                cleaned_code = self._clean_code_output(raw_content, block_type if mode != "terminal_gen" else "shell")
                 return cleaned_code
             else:
                 self.log(f"❌ Erreur API IA: {response.status_code}")
@@ -659,6 +693,104 @@ Modifie le code ci-dessus pour satisfaire la demande tout en respectant les bonn
                 text = "\n".join(lines[code_start_idx:])
         return text
 
+# --- NOUVEAU : Dialogues pour le Modificateur Contextuel ---
+class ContextFileSelectorDialog(Gtk.Dialog):
+    def __init__(self, parent, project_root, on_select_cb):
+        super().__init__(title="Sélectionner un fichier de contexte", transient_for=parent, default_width=400, default_height=600)
+        self.add_css_class("rounded-dialog")
+        self.project_root = project_root
+        self.on_select_cb = on_select_cb
+        
+        content = self.get_content_area()
+        content.set_spacing(10)
+        set_margins(content, 16)
+        
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        self.listbox = Gtk.ListBox()
+        self.listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        scroll.set_child(self.listbox)
+        content.append(scroll)
+        
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, halign=Gtk.Align.END)
+        btn_cancel = Gtk.Button(label="Annuler")
+        btn_confirm = Gtk.Button(label="✅ Sélectionner", css_classes=["suggested-action"])
+        btn_box.append(btn_cancel)
+        btn_box.append(btn_confirm)
+        content.append(btn_box)
+        
+        self._populate_files()
+        btn_cancel.connect("clicked", lambda *_: self.destroy())
+        btn_confirm.connect("clicked", self._on_confirm)
+
+    def _populate_files(self):
+        if not self.project_root: return
+        for f in sorted(self.project_root.rglob('*')):
+            if f.is_file() and f.suffix in ['.py', '.js', '.css', '.html', '.c', '.cpp', '.h']:
+                row = Gtk.ListBoxRow()
+                lbl = Gtk.Label(label=str(f.relative_to(self.project_root)), xalign=0, margin_start=8, margin_top=4, margin_bottom=4)
+                row.set_child(lbl)
+                row._path = f
+                self.listbox.append(row)
+
+    def _on_confirm(self, *_):
+        row = self.listbox.get_selected_row()
+        if row and hasattr(row, '_path'):
+            self.on_select_cb(row._path)
+            self.destroy()
+
+class ContextBlockSelectorDialog(Gtk.Dialog):
+    def __init__(self, parent, file_path, on_select_cb):
+        super().__init__(title=f"Sélectionner des blocs de contexte : {file_path.name}", transient_for=parent, default_width=500, default_height=600)
+        self.add_css_class("rounded-dialog")
+        self.file_path = file_path
+        self.on_select_cb = on_select_cb
+        self.selected_blocks = []
+        
+        content = self.get_content_area()
+        content.set_spacing(10)
+        set_margins(content, 16)
+        
+        try:
+            code = file_path.read_text(encoding='utf-8')
+            self.blocks = parse_blocks(code, str(file_path))
+        except:
+            self.blocks = []
+            
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        self.listbox = Gtk.ListBox()
+        self.listbox.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
+        scroll.set_child(self.listbox)
+        content.append(scroll)
+        
+        for block in self.blocks:
+            row = Gtk.ListBoxRow()
+            lbl = Gtk.Label(label=f"[{block['type'].upper()}] {block['name']}", xalign=0, margin_start=8, margin_top=4, margin_bottom=4)
+            row.set_child(lbl)
+            row._block = block
+            self.listbox.append(row)
+            
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, halign=Gtk.Align.END)
+        btn_cancel = Gtk.Button(label="Annuler")
+        btn_confirm = Gtk.Button(label="✅ Ajouter au Contexte", css_classes=["suggested-action"])
+        btn_box.append(btn_cancel)
+        btn_box.append(btn_confirm)
+        content.append(btn_box)
+        
+        btn_cancel.connect("clicked", lambda *_: self.destroy())
+        btn_confirm.connect("clicked", self._on_confirm)
+
+    def _on_confirm(self, *_):
+        rows = self.listbox.get_selected_rows()
+        context_str = ""
+        for row in rows:
+            if hasattr(row, '_block'):
+                b = row._block
+                context_str += f"--- BLOC CONTEXTE: {b['name']} ({b['type']}) ---\n{b['code']}\n"
+        self.on_select_cb(context_str)
+        self.destroy()
+
 class AIModificationDialog(Gtk.Dialog):
     def __init__(self, parent, block, ai_engine, on_confirm_cb):
         super().__init__(title=f"✨ Modification IA : {block['name']}", transient_for=parent, default_width=1000, default_height=700)
@@ -667,6 +799,7 @@ class AIModificationDialog(Gtk.Dialog):
         self.ai_engine = ai_engine
         self.on_confirm_cb = on_confirm_cb
         self.modified_code = None
+        self.context_deps = ""
         
         content = self.get_content_area()
         content.set_spacing(10)
@@ -675,6 +808,10 @@ class AIModificationDialog(Gtk.Dialog):
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         lbl_type = Gtk.Label(label=f"Type: {block['type'].upper()}", css_classes=["badge-function"], margin_end=10)
         header.append(lbl_type)
+        btn_add_context = Gtk.Button(label="📂 Ajouter Contexte Fichier/Bloc")
+        btn_add_context.add_css_class("ctrl-btn-small")
+        btn_add_context.connect("clicked", self._open_context_selector)
+        header.append(btn_add_context)
         content.append(header)
         content.append(Gtk.Separator())
         
@@ -740,7 +877,6 @@ class AIModificationDialog(Gtk.Dialog):
         icon = Gtk.Image.new_from_icon_name("mail-send-symbolic")
         self.btn_generate.set_child(icon)
         self.btn_generate.connect("clicked", self._on_generate)
-        
         generate_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         generate_box.append(self.spinner)
         generate_box.append(self.btn_generate)
@@ -761,6 +897,25 @@ class AIModificationDialog(Gtk.Dialog):
         bottom_action_box.append(btn_accept)
         content.append(bottom_action_box)
 
+    def _open_context_selector(self, *_):
+        root = None
+        if hasattr(self.get_root(), 'project_root'):
+            root = self.get_root().project_root
+        if not root:
+            self.ai_engine.log("❌ Impossible de déterminer la racine du projet pour le contexte.")
+            return
+            
+        def on_file_selected(file_path):
+            dlg_blocks = ContextBlockSelectorDialog(self, file_path, self._add_context_blocks)
+            dlg_blocks.present()
+            
+        dlg_files = ContextFileSelectorDialog(self, root, on_file_selected)
+        dlg_files.present()
+
+    def _add_context_blocks(self, context_str):
+        self.context_deps += context_str
+        self.ai_engine.log(f"✅ Contexte ajouté ({len(context_str)} chars).")
+
     def _get_lang(self, btype):
         mapping = {
             "function": "python", "class": "python", "django_model": "python",
@@ -779,13 +934,14 @@ class AIModificationDialog(Gtk.Dialog):
         if not intent:
             self.ai_engine.log("⚠️ Veuillez décrire la modification.")
             return
+            
         self.spinner.start()
         self.spinner.set_visible(True)
         self.btn_generate.set_sensitive(False)
         threading.Thread(target=self._thread_generate, args=(self.block['type'], intent), daemon=True).start()
 
     def _thread_generate(self, btype, intent):
-        result = self.ai_engine.process_modification(btype, self.block['code'], intent)
+        result = self.ai_engine.process_modification(btype, self.block['code'], intent, self.context_deps, mode="contextual_modify")
         GLib.idle_add(self._update_ui_with_result, result)
 
     def _update_ui_with_result(self, result):
@@ -888,6 +1044,489 @@ class LlamaSetupDialog(Gtk.Dialog):
         dlg.present()
 
 # ═══════════════════════════════════════════════════════════════════════
+#  NOUVEAUX POPUPS TERMINAL (DÉSATURATION)
+# ═══════════════════════════════════════════════════════════════════════
+class LogAnalyzerDialog(Gtk.Dialog):
+    def __init__(self, parent, ai_engine, log_callback):
+        super().__init__(title="🔍 Analyseur de Logs IA", transient_for=parent, default_width=700, default_height=600)
+        self.add_css_class("rounded-dialog")
+        self.ai_engine = ai_engine
+        self.log_callback = log_callback
+        
+        content = self.get_content_area()
+        content.set_spacing(12)
+        set_margins(content, 16)
+        
+        content.append(Gtk.Label(label="1. Collez les logs à analyser :", xalign=0, css_classes=["heading"]))
+        scroll_logs = Gtk.ScrolledWindow()
+        scroll_logs.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll_logs.set_size_request(-1, 150)
+        self.txt_logs = Gtk.TextView()
+        self.txt_logs.set_wrap_mode(Gtk.WrapMode.WORD)
+        scroll_logs.set_child(self.txt_logs)
+        content.append(scroll_logs)
+        
+        content.append(Gtk.Label(label="2. Question spécifique (optionnel) :", xalign=0, css_classes=["heading"], margin_top=8))
+        self.txt_question = Gtk.Entry()
+        self.txt_question.set_placeholder_text("Ex: Pourquoi le serveur plante-t-il ?")
+        content.append(self.txt_question)
+        
+        btn_analyze = Gtk.Button(label="🤖 Analyser les Logs")
+        btn_analyze.add_css_class("suggested-action")
+        btn_analyze.set_halign(Gtk.Align.END)
+        btn_analyze.connect("clicked", self._on_analyze)
+        content.append(btn_analyze)
+        content.append(Gtk.Separator(margin_top=8, margin_bottom=8))
+        
+        content.append(Gtk.Label(label="3. Résultat de l'analyse :", xalign=0, css_classes=["heading"]))
+        scroll_result = Gtk.ScrolledWindow()
+        scroll_result.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll_result.set_vexpand(True)
+        self.txt_result = Gtk.TextView()
+        self.txt_result.set_editable(False)
+        self.txt_result.set_monospace(True)
+        self.txt_result.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.txt_result.add_css_class("log-view")
+        scroll_result.set_child(self.txt_result)
+        content.append(scroll_result)
+        
+        btn_close = Gtk.Button(label="Fermer", margin_top=12)
+        btn_close.set_halign(Gtk.Align.END)
+        btn_close.connect("clicked", lambda *_: self.destroy())
+        content.append(btn_close)
+
+    def _on_analyze(self, *_):
+        logs = self.txt_logs.get_buffer().get_text(self.txt_logs.get_buffer().get_start_iter(), self.txt_logs.get_buffer().get_end_iter(), True).strip()
+        question = self.txt_question.get_text().strip()
+        if not logs:
+            self.log_callback("❌ Veuillez coller des logs à analyser.")
+            return
+            
+        intent = f"Analyse ces logs. Question spécifique: {question if question else 'Explique les erreurs et propose une solution.'}"
+        self.log_callback("🤖 Analyse des logs en cours...")
+        self.txt_result.get_buffer().set_text("Analyse en cours...")
+        
+        def _thread():
+            result = self.ai_engine.process_modification("log_analysis", logs, intent, mode="log_analysis")
+            if result:
+                GLib.idle_add(lambda: self.txt_result.get_buffer().set_text(result))
+                GLib.idle_add(lambda: self.log_callback("📊 ANALYSE IA TERMINÉE."))
+            else:
+                GLib.idle_add(lambda: self.txt_result.get_buffer().set_text("❌ Échec de l'analyse IA."))
+                GLib.idle_add(lambda: self.log_callback("❌ Échec de l'analyse IA."))
+                
+        threading.Thread(target=_thread, daemon=True).start()
+
+class SmartTerminalBuilderDialog(Gtk.Dialog):
+    def __init__(self, parent, terminal_panel):
+        super().__init__(title="🛠️ Constructeur de Commandes en Chaîne", transient_for=parent, default_width=800, default_height=700)
+        self.add_css_class("rounded-dialog")
+        self.terminal_panel = terminal_panel
+        self.available_commands = []
+        self.sudo_active = False
+        
+        content = self.get_content_area()
+        content.set_spacing(12)
+        set_margins(content, 16)
+        
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        header.append(Gtk.Label(label="Construisez votre commande étape par étape", css_classes=["heading"]))
+        spacer = Gtk.Box(); spacer.set_hexpand(True); header.append(spacer)
+        self.chk_sudo = Gtk.CheckButton(label="Sudo")
+        self.chk_sudo.connect("toggled", self._on_sudo_toggled)
+        header.append(self.chk_sudo)
+        btn_translate = Gtk.Button(label="🗣 NL -> Cmd")
+        btn_translate.add_css_class("suggested-action")
+        btn_translate.connect("clicked", self._open_translator_dialog)
+        header.append(btn_translate)
+        content.append(header)
+        content.append(Gtk.Separator())
+        
+        scroll_chain = Gtk.ScrolledWindow()
+        scroll_chain.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll_chain.set_vexpand(True)
+        self.chain_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        scroll_chain.set_child(self.chain_box)
+        content.append(scroll_chain)
+        
+        btn_add_first = Gtk.Button(label="➕ Ajouter la première commande")
+        btn_add_first.add_css_class("ctrl-btn-start")
+        btn_add_first.connect("clicked", lambda *_: self._add_command_segment())
+        self.chain_box.append(btn_add_first)
+        content.append(Gtk.Separator(margin_top=8, margin_bottom=8))
+        
+        content.append(Gtk.Label(label="Commande générée (Prévisualisation) :", xalign=0, css_classes=["heading"]))
+        preview_scroll = Gtk.ScrolledWindow()
+        preview_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+        self.lbl_preview = Gtk.Label(label="$ ...", xalign=0, css_classes=["terminal-prompt"])
+        self.lbl_preview.set_hexpand(True)
+        self.lbl_preview.set_selectable(True)
+        preview_scroll.set_child(self.lbl_preview)
+        content.append(preview_scroll)
+        
+        action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, halign=Gtk.Align.END)
+        btn_cancel = Gtk.Button(label="Annuler")
+        btn_cancel.connect("clicked", lambda *_: self.destroy())
+        btn_exec = Gtk.Button(label="▶ Exécuter la commande")
+        btn_exec.add_css_class("ctrl-btn-start")
+        btn_exec.connect("clicked", self._execute_built_command)
+        action_box.append(btn_cancel)
+        action_box.append(btn_exec)
+        content.append(action_box)
+        
+        self._load_commands_async()
+
+    def _load_commands_async(self):
+        def _thread():
+            cmds = set()
+            try:
+                for d in ['/bin', '/sbin', '/usr/bin', '/usr/sbin']:
+                    if Path(d).exists():
+                        for f in Path(d).iterdir():
+                            if f.is_file() and os.access(f, os.X_OK):
+                                cmds.add(f.name)
+            except: pass
+            GLib.idle_add(self._update_command_list, sorted(list(cmds)))
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _update_command_list(self, cmds):
+        self.available_commands = cmds
+
+    def _add_command_segment(self):
+        first_child = self.chain_box.get_first_child()
+        if isinstance(first_child, Gtk.Button) and first_child.get_label() == "➕ Ajouter la première commande":
+            self.chain_box.remove(first_child)
+            
+        segment_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        segment_box.add_css_class("ctrl-btn")
+        
+        # 1. Commande
+        cmd_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        cmd_row.append(Gtk.Label(label="Commande :", width_request=80, xalign=0))
+        combo_cmd = Gtk.ComboBoxText()
+        combo_cmd.set_hexpand(True)
+        for c in self.available_commands:
+            combo_cmd.append_text(c)
+        combo_cmd.set_active(-1)
+        cmd_row.append(combo_cmd)
+        segment_box.append(cmd_row)
+        
+        # 2. Options (No-code)
+        opt_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        opt_row.append(Gtk.Label(label="Options :", width_request=80, xalign=0))
+        opts_container = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        opts_container.set_hexpand(True)
+        opts_container.add_css_class("options-container")
+        opt_row.append(opts_container)
+        
+        btn_add_opt = Gtk.Button(label="➕ Option")
+        btn_add_opt.add_css_class("ctrl-btn-small")
+        btn_add_opt.connect("clicked", lambda *_: self._show_options_popover(combo_cmd, opts_container))
+        opt_row.append(btn_add_opt)
+        segment_box.append(opt_row)
+        
+        # 3. Arguments (Saisie manuelle)
+        arg_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        arg_row.append(Gtk.Label(label="Arguments :", width_request=80, xalign=0))
+        args_container = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        args_container.set_hexpand(True)
+        args_container.add_css_class("args-container")
+        arg_row.append(args_container)
+        
+        btn_add_arg = Gtk.Button(label="➕ Argument")
+        btn_add_arg.add_css_class("ctrl-btn-small")
+        btn_add_arg.connect("clicked", lambda *_: self._show_add_argument_dialog(args_container))
+        arg_row.append(btn_add_arg)
+        segment_box.append(arg_row)
+        
+        self.chain_box.append(segment_box)
+        self._update_preview()
+        
+        # 4. Operator + Next Command
+        op_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, margin_start=40)
+        combo_op = Gtk.ComboBoxText()
+        for op in ['&&', '||', '|', ';', '>', '>>']:
+            combo_op.append_text(op)
+        combo_op.set_active(0)
+        combo_op.connect("changed", lambda *_: self._update_preview())
+        op_box.append(combo_op)
+        
+        btn_next = Gtk.Button(label="➕ Ajouter la commande suivante")
+        btn_next.add_css_class("ctrl-btn-small")
+        btn_next.connect("clicked", lambda *_: self._add_command_segment())
+        op_box.append(btn_next)
+        
+        self.chain_box.append(op_box)
+        
+        def on_cmd_changed(*_):
+            self._update_preview()
+            # Clear options and args when command changes
+            while child := opts_container.get_first_child():
+                opts_container.remove(child)
+            while child := args_container.get_first_child():
+                args_container.remove(child)
+                
+        combo_cmd.connect("changed", on_cmd_changed)
+
+    def _show_options_popover(self, combo_cmd, opts_container):
+        cmd = combo_cmd.get_active_text()
+        if not cmd:
+            return
+            
+        popover = Gtk.Popover()
+        popover.set_parent(combo_cmd)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_size_request(250, 300)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box.set_margin_start(8)
+        box.set_margin_end(8)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+        
+        lbl = Gtk.Label(label=f"Options pour '{cmd}'", css_classes=["heading"], xalign=0, margin_bottom=8)
+        box.append(lbl)
+        
+        def _fetch():
+            options = []
+            try:
+                proc = subprocess.run([cmd, "--help"], capture_output=True, text=True, timeout=3)
+                text = proc.stdout + proc.stderr
+                if text:
+                    for line in text.split('\n'):
+                        line = line.strip()
+                        if line.startswith('-') or line.startswith('--'):
+                            parts = line.split()
+                            if parts:
+                                opt = parts[0].rstrip(',').rstrip(':')
+                                if opt not in options and len(opt) > 1:
+                                    options.append(opt)
+                
+                if len(options) < 3:
+                    proc_man = subprocess.run(["man", cmd], capture_output=True, text=True, timeout=5)
+                    if proc_man.returncode == 0:
+                        for line in proc_man.stdout.split('\n'):
+                            match = re.search(r'^\s+(-[a-zA-Z0-9\-]+|--[a-zA-Z0-9\-]+)', line)
+                            if match:
+                                opt = match.group(1)
+                                if opt not in options:
+                                    options.append(opt)
+                                if len(options) >= 40:
+                                    break
+            except Exception:
+                pass
+            
+            GLib.idle_add(lambda: self._populate_options_list(options, box, opts_container, popover))
+            
+        threading.Thread(target=_fetch, daemon=True).start()
+        scroll.set_child(box)
+        popover.set_child(scroll)
+        popover.popup()
+
+    def _populate_options_list(self, options, box, opts_container, popover):
+        if not options:
+            lbl = Gtk.Label(label="Aucune option trouvée", css_classes=["dim-label"])
+            box.append(lbl)
+            return
+            
+        for opt in options:
+            btn = Gtk.Button(label=opt)
+            btn.set_halign(Gtk.Align.FILL)
+            btn.add_css_class("flat")
+            
+            def on_opt_clicked(b, o=opt):
+                # Check if already added
+                child = opts_container.get_first_child()
+                while child:
+                    if hasattr(child, '_opt_val') and child._opt_val == o:
+                        return # Already exists
+                    child = child.get_next_sibling()
+                
+                # Add tag
+                tag_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+                tag_box._opt_val = o
+                tag_lbl = Gtk.Label(label=o, css_classes=["option-tag"])
+                tag_box.append(tag_lbl)
+                
+                btn_remove = Gtk.Button(label="✕")
+                btn_remove.add_css_class("flat")
+                btn_remove.add_css_class("destructive-action")
+                btn_remove.set_margin_start(4)
+                btn_remove.connect("clicked", lambda *_: (opts_container.remove(tag_box), self._update_preview()))
+                tag_box.append(btn_remove)
+                
+                opts_container.append(tag_box)
+                popover.popdown()
+                self._update_preview()
+                
+            btn.connect("clicked", on_opt_clicked)
+            box.append(btn)
+
+    def _show_add_argument_dialog(self, args_container):
+        dialog = Gtk.Dialog(title="Ajouter un argument", transient_for=self.get_root())
+        dialog.add_css_class("rounded-dialog")
+        dialog.set_default_size(350, 150)
+        content = dialog.get_content_area()
+        content.set_spacing(10)
+        set_margins(content, 16)
+        
+        content.append(Gtk.Label(label="Saisissez la valeur de l'argument :", xalign=0))
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("ex: fichier.txt, /chemin/, 8080")
+        content.append(entry)
+        
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, halign=Gtk.Align.END, margin_top=12)
+        btn_cancel = Gtk.Button(label="Annuler")
+        btn_add = Gtk.Button(label="✅ Ajouter", css_classes=["suggested-action"])
+        btn_box.append(btn_cancel)
+        btn_box.append(btn_add)
+        content.append(btn_box)
+        
+        def on_add(*_):
+            val = entry.get_text().strip()
+            if not val:
+                dialog.destroy()
+                return
+                
+            tag_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+            tag_box._arg_val = val
+            tag_lbl = Gtk.Label(label=val, css_classes=["arg-tag"])
+            tag_box.append(tag_lbl)
+            
+            btn_remove = Gtk.Button(label="✕")
+            btn_remove.add_css_class("flat")
+            btn_remove.add_css_class("destructive-action")
+            btn_remove.set_margin_start(4)
+            btn_remove.connect("clicked", lambda *_: (args_container.remove(tag_box), self._update_preview()))
+            tag_box.append(btn_remove)
+            
+            args_container.append(tag_box)
+            dialog.destroy()
+            self._update_preview()
+            
+        btn_add.connect("clicked", on_add)
+        btn_cancel.connect("clicked", lambda *_: dialog.destroy())
+        entry.connect("activate", on_add)
+        dialog.present()
+
+    def _on_sudo_toggled(self, *_):
+        self.sudo_active = self.chk_sudo.get_active()
+        self._update_preview()
+
+    def _update_preview(self):
+        final_cmd = self._rebuild_chain()
+        if final_cmd:
+            self.lbl_preview.set_text(f"$ {final_cmd}")
+            self.final_command_string = final_cmd
+        else:
+            self.lbl_preview.set_text("$ ...")
+            self.final_command_string = ""
+
+    def _rebuild_chain(self):
+        cmd_str_parts = []
+        if self.sudo_active:
+            cmd_str_parts.append("sudo")
+            
+        current_cmd_parts = []
+        current_op = ""
+        
+        child = self.chain_box.get_first_child()
+        while child:
+            if isinstance(child, Gtk.Box):
+                first_widget = child.get_first_child()
+                if isinstance(first_widget, Gtk.Label) and first_widget.get_label() == "Commande :":
+                    if current_cmd_parts:
+                        cmd_str_parts.append(" ".join(current_cmd_parts))
+                    if current_op:
+                        cmd_str_parts.append(current_op)
+                    current_cmd_parts = []
+                    current_op = ""
+                    
+                    combo = first_widget.get_next_sibling()
+                    cmd = combo.get_active_text() or ""
+                    
+                    opt_row = child.get_first_child().get_next_sibling()
+                    opts_container = opt_row.get_first_child().get_next_sibling()
+                    opts = []
+                    opt_child = opts_container.get_first_child()
+                    while opt_child:
+                        if hasattr(opt_child, '_opt_val'):
+                            opts.append(opt_child._opt_val)
+                        opt_child = opt_child.get_next_sibling()
+                        
+                    arg_row = opt_row.get_next_sibling()
+                    args_container = arg_row.get_first_child().get_next_sibling()
+                    args = []
+                    arg_child = args_container.get_first_child()
+                    while arg_child:
+                        if hasattr(arg_child, '_arg_val'):
+                            args.append(arg_child._arg_val)
+                        arg_child = arg_child.get_next_sibling()
+                        
+                    if cmd:
+                        current_cmd_parts.append(cmd)
+                        current_cmd_parts.extend(opts)
+                        current_cmd_parts.extend(args)
+                        
+                elif isinstance(first_widget, Gtk.Label) and first_widget.get_label().startswith("➕"):
+                    combo = first_widget.get_first_child()
+                    current_op = combo.get_active_text()
+                    
+            child = child.get_next_sibling()
+            
+        if current_cmd_parts:
+            cmd_str_parts.append(" ".join(current_cmd_parts))
+            
+        return " ".join(cmd_str_parts)
+
+    def _execute_built_command(self, *_):
+        if hasattr(self, 'final_command_string') and self.final_command_string:
+            self.terminal_panel._run_custom_command_text(self.final_command_string)
+            self.destroy()
+
+    def _open_translator_dialog(self, *_):
+        dialog = Gtk.Dialog(title="🗣 Traducteur NL -> Terminal", transient_for=self.get_root())
+        dialog.add_css_class("rounded-dialog")
+        dialog.set_default_size(500, 300)
+        content = dialog.get_content_area()
+        content.set_spacing(10)
+        set_margins(content, 16)
+        
+        content.append(Gtk.Label(label="Décrivez l'action en langage naturel :", xalign=0))
+        txt_input = Gtk.TextView(); txt_input.set_wrap_mode(Gtk.WrapMode.WORD)
+        scroll_in = Gtk.ScrolledWindow(); scroll_in.set_size_request(-1, 100); scroll_in.set_child(txt_input)
+        content.append(scroll_in)
+        
+        btn_translate = Gtk.Button(label="🔄 Générer Commande"); btn_translate.add_css_class("suggested-action")
+        content.append(btn_translate)
+        
+        lbl_result = Gtk.Label(label="", xalign=0, css_classes=["terminal-prompt"])
+        content.append(lbl_result)
+        
+        btn_use = Gtk.Button(label="✅ Utiliser cette commande"); btn_use.set_sensitive(False)
+        btn_use.add_css_class("ctrl-btn-start")
+        content.append(btn_use)
+        
+        def on_translate(*_):
+            intent = txt_input.get_buffer().get_text(txt_input.get_buffer().get_start_iter(), txt_input.get_buffer().get_end_iter(), True).strip()
+            if not intent: return
+            lbl_result.set_text("Génération en cours...")
+            def _thread():
+                cmd = self.terminal_panel.ai_engine.process_modification("shell", "", intent, mode="terminal_gen")
+                GLib.idle_add(lambda: (lbl_result.set_text(f"$ {cmd}"), btn_use.set_sensitive(True), setattr(dialog, '_generated_cmd', cmd)))
+            threading.Thread(target=_thread, daemon=True).start()
+            
+        def on_use(*_):
+            if hasattr(dialog, '_generated_cmd'):
+                cmd = dialog._generated_cmd
+                self.terminal_panel._run_custom_command_text(cmd)
+                dialog.destroy()
+                
+        btn_translate.connect("clicked", on_translate)
+        btn_use.connect("clicked", on_use)
+        dialog.present()
+
+# ═══════════════════════════════════════════════════════════════════════
 #  WIDGETS
 # ═══════════════════════════════════════════════════════════════════════
 TYPE_ICONS = {"import": "📦", "class": "🏛", "function": "⚡", "separator": "─", "comment": "💬", "other": "▪", "template": "🌐", "template_part": "🌐", "django_block": "🧩", "style": "🎨", "style_rule": "🎨", "script": "⚙️", "script_block": "⚡", "c_block": "⚙️"}
@@ -917,7 +1556,6 @@ class BlockCard(Gtk.Box):
         header.append(Gtk.Label(label=TYPE_ICONS.get(self.block["type"], "▪"), css_classes=["block-icon"]))
         badge = Gtk.Label(label=self.block["type"].upper()); badge.add_css_class("block-badge"); badge.add_css_class(f"badge-{self.block['type']}"); header.append(badge)
         lbl_name = Gtk.Label(label=self.block["name"]); lbl_name.set_ellipsize(Pango.EllipsizeMode.END); lbl_name.set_hexpand(True); lbl_name.set_xalign(0); lbl_name.set_max_width_chars(40); lbl_name.add_css_class("block-name"); header.append(lbl_name)
-        
         if self.ai_engine:
             btn_ai = Gtk.Button(label="🤖 IA")
             btn_ai.set_tooltip_text("Modifier ce bloc avec l'IA")
@@ -925,7 +1563,6 @@ class BlockCard(Gtk.Box):
             btn_ai.add_css_class("btn-ai")
             btn_ai.connect("clicked", self._open_ai_dialog)
             header.append(btn_ai)
-            
         for label, tooltip, cb, css in [("👁", "View / Edit", self._view_code, "btn-view"), ("✏", "Inline Edit", self._toggle_edit, "btn-edit"), ("⧉", "Copy", self._do_copy, "btn-copy"), ("✕", "Delete", self._do_delete, "btn-delete")]:
             btn = Gtk.Button(label=label); btn.set_tooltip_text(tooltip); btn.add_css_class("block-action-btn"); btn.add_css_class(css); btn.connect("clicked", cb); header.append(btn)
         self.append(header)
@@ -974,6 +1611,7 @@ class BlockCard(Gtk.Box):
         self.on_save_cb(self.block, self.block["code"]); self._toggle_edit()
 
     def _do_copy(self, *_): Gdk.Display.get_default().get_clipboard().set(self.block["code"])
+
     def _do_delete(self, *_): self.on_delete_cb(self.block)
 
     def _open_ai_dialog(self, *_):
@@ -1037,6 +1675,7 @@ class FilePanel(Gtk.Box):
             self.watcher.start()
 
     def _refresh_tree_idle(self): GLib.idle_add(self._refresh_tree)
+
     def _refresh_tree(self):
         if self.project_root: self._populate_tree(self.project_root, None)
 
@@ -1207,17 +1846,30 @@ class TerminalPanel(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.get_project_root, self.get_config, self.show_toast = get_project_root, get_config, show_toast
         self.add_css_class("terminal-panel"); self._build()
+        self.ai_engine = BlockAIEngine(config_getter=self.get_config, log_callback=self._log)
 
     def _build(self):
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8); header.set_margin_start(8); header.set_margin_end(8); header.set_margin_top(4); header.set_margin_bottom(4)
         header.append(Gtk.Label(label="🖥 Terminal Log", css_classes=["terminal-title"]))
         spacer = Gtk.Box(); spacer.set_hexpand(True); header.append(spacer)
+        
+        btn_analyze = Gtk.Button(label="🔍 Analyseur Logs IA")
+        btn_analyze.add_css_class("ctrl-btn-small")
+        btn_analyze.connect("clicked", lambda *_: self._open_log_analyzer())
+        header.append(btn_analyze)
+        
+        btn_build = Gtk.Button(label="🛠️ Constructeur Cmd")
+        btn_build.add_css_class("ctrl-btn-small")
+        btn_build.connect("clicked", lambda *_: self._open_cmd_builder())
+        header.append(btn_build)
+        
         btn_clear = Gtk.Button(label="🗑 Clear"); btn_clear.add_css_class("ctrl-btn-small"); btn_clear.connect("clicked", lambda *_: self.log_view.get_buffer().set_text(""))
         header.append(btn_clear); self.append(header); self.append(Gtk.Separator())
         
         self.log_view = Gtk.TextView(); self.log_view.set_editable(False); self.log_view.set_monospace(True); self.log_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR); self.log_view.set_cursor_visible(False); self.log_view.add_css_class("log-view")
         log_scroll = Gtk.ScrolledWindow(); log_scroll.set_hexpand(True); log_scroll.set_vexpand(True); log_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC); log_scroll.set_child(self.log_view)
         self.append(log_scroll)
+        self.append(Gtk.Separator())
         
         term_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6); term_box.set_margin_top(4); term_box.set_margin_bottom(4); term_box.set_margin_start(8); term_box.set_margin_end(8)
         term_box.append(Gtk.Label(label="➜", css_classes=["terminal-prompt"]))
@@ -1225,16 +1877,22 @@ class TerminalPanel(Gtk.Box):
         btn_run = Gtk.Button(label="▶"); btn_run.add_css_class("ctrl-btn-start"); btn_run.connect("clicked", self._run_custom_command)
         term_box.append(self.cmd_entry); term_box.append(btn_run); self.append(term_box)
 
+    def _open_log_analyzer(self, *_):
+        dialog = LogAnalyzerDialog(self.get_root(), self.ai_engine, self._log)
+        dialog.present()
+
+    def _open_cmd_builder(self, *_):
+        dialog = SmartTerminalBuilderDialog(self.get_root(), self)
+        dialog.present()
+
     def _log(self, text: str):
         def _append():
             buf = self.log_view.get_buffer(); buf.insert(buf.get_end_iter(), f"[{datetime.now().strftime('%H:%M:%S')}] {text}\n")
             adj = self.log_view.get_parent().get_vadjustment(); adj.set_value(adj.get_upper())
         GLib.idle_add(_append); log_to_file(self.get_config(), text)
 
-    def _run_custom_command(self, *_):
-        cmd_text = self.cmd_entry.get_text().strip()
-        if not cmd_text: return
-        self._log(f"💻 $ {cmd_text}"); self.cmd_entry.set_text("")
+    def _run_custom_command_text(self, cmd_text):
+        self._log(f"💻 $ {cmd_text}")
         root = self.get_project_root()
         def _thread():
             try:
@@ -1251,6 +1909,12 @@ class TerminalPanel(Gtk.Box):
             except Exception as e: GLib.idle_add(self._log, f"❌ Error: {e}")
         threading.Thread(target=_thread, daemon=True).start()
 
+    def _run_custom_command(self, *_):
+        cmd_text = self.cmd_entry.get_text().strip()
+        if not cmd_text: return
+        self._run_custom_command_text(cmd_text)
+        self.cmd_entry.set_text("")
+
 class ControlPanel(Gtk.Box):
     def __init__(self, get_project_root, get_config, show_toast, terminal_panel):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -1261,9 +1925,7 @@ class ControlPanel(Gtk.Box):
 
     def _build(self):
         self.session_label = Gtk.Label(label="No project loaded"); self.session_label.add_css_class("control-section-title"); self.session_label.set_xalign(0); self.append(self.session_label)
-        
         port_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6); port_box.set_margin_bottom(8)
-        # MODIFICATION ICI : Remplacement de "🌐 Ouvrir Navigateur" par "🌐 URLs Accessibles"
         for label, cb in [("🔍 Check", self._check_ports), ("🔫 Kill port", self._kill_port_dialog), ("🔓 UFW Allow", self._ufw_allow_dialog), ("🌐 URLs Accessibles", self._show_open_browser_dialog)]:
             btn = Gtk.Button(label=label); btn.add_css_class("ctrl-btn-small"); btn.connect("clicked", cb); port_box.append(btn)
         self.append(port_box)
@@ -1375,7 +2037,7 @@ class ControlPanel(Gtk.Box):
         btn_decompress = Gtk.Button(label="📂 Decompress .zip"); btn_decompress.add_css_class("ctrl-btn"); btn_decompress.connect("clicked", self._decompress_archive)
         row_arch.append(btn_compress); row_arch.append(btn_decompress); self.append(row_arch)
         
-        sep4 = Gtk.Separator(); sep4.set_margin_top(8); sep4.set_margin_bottom=4; self.append(sep4)
+        sep4 = Gtk.Separator(); sep4.set_margin_top(8); sep4.set_margin_bottom(4); self.append(sep4)
         btn_stop_all = Gtk.Button(label="⏹ Stop all"); btn_stop_all.add_css_class("ctrl-btn-stop"); btn_stop_all.connect("clicked", self._stop_all_services); self.append(btn_stop_all)
 
     def _add_service_row(self, name, label, start_cb, stop_cb):
@@ -1597,7 +2259,6 @@ class ControlPanel(Gtk.Box):
             dialog.destroy()
         btn_open.connect("clicked", on_open); btn_cancel.connect("clicked", lambda *_: dialog.destroy()); dialog.present()
 
-    # MODIFICATION ICI : Nouvelle méthode pour afficher les URLs avec un bouton "Copier"
     def _show_open_browser_dialog(self, *_):
         urls = []
         session = self.current_session
@@ -1611,7 +2272,6 @@ class ControlPanel(Gtk.Box):
         if not urls:
             self.show_toast("❌ Aucun serveur actif à copier")
             return
-            
         dialog = Gtk.Dialog(title="🌐 URLs Accessibles", transient_for=self.get_root())
         dialog.add_css_class("rounded-dialog")
         dialog.set_default_size(450, 250)
@@ -1619,7 +2279,6 @@ class ControlPanel(Gtk.Box):
         content.set_spacing(12)
         set_margins(content, 16)
         content.append(Gtk.Label(label="Serveurs actifs détectés (Cliquez pour copier) :", xalign=0, css_classes=["heading"], margin_bottom=8))
-        
         for name, url in urls:
             box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin_bottom=4)
             lbl = Gtk.Label(label=f"{name} : {url}", xalign=0, hexpand=True)
@@ -1630,13 +2289,11 @@ class ControlPanel(Gtk.Box):
             btn.connect("clicked", lambda _, u=url: self._copy_to_clipboard(u))
             box.append(btn)
             content.append(box)
-            
         btn_close = Gtk.Button(label="Fermer", margin_top=12)
         btn_close.connect("clicked", lambda *_: dialog.destroy())
         content.append(btn_close)
         dialog.present()
 
-    # MODIFICATION ICI : Méthode utilitaire pour copier dans le presse-papiers
     def _copy_to_clipboard(self, text):
         Gdk.Display.get_default().get_clipboard().set(text)
         self.show_toast("✅ URL copiée dans le presse-papiers")
@@ -2295,7 +2952,7 @@ location / {{
         if auth_mode == "key" and key_path:
             expanded_key = os.path.expanduser(key_path)
             cmd_parts.extend(["-i", expanded_key])
-            cmd_parts.extend(["-o", "PasswordAuthentication=no"])
+        cmd_parts.extend(["-o", "PasswordAuthentication=no"])
         cmd_parts.append(f"{user}@{host}")
         final_cmd = " ".join(cmd_parts)
         NativeTtyTerminal(self.get_root(), f"SSH: {user}@{host}", final_cmd)
@@ -2580,6 +3237,7 @@ print(json.dumps(result, default=str))
         self._run_cmd(["sudo", sys.executable, str(gy_path)] if sudo else [sys.executable, str(gy_path)], cwd=str(gy_path.parent), name=f"gy_{rel_path}")
 
     def _open_browser(self, *_): self._open_browser_url("http://localhost:8000")
+
     def _open_browser_url(self, url):
         user = os.environ.get("SUDO_USER", "gykhamine")
         self.terminal._log(f"🌐 Ouverture de {url} en tant que {user}...")
@@ -2633,16 +3291,20 @@ print(json.dumps(result, default=str))
             self.terminal._log("✅ Decompression finished."); self.show_toast("📂 Archive decompressed")
         except Exception as e: self.terminal._log(f"❌ Error: {e}"); self.show_toast("❌ Failed")
 
+# --- NOUVEAU : Compilateur C++ avec Générateur d'Optimisation ---
 class CCompilerDialog(Gtk.Dialog):
     def __init__(self, parent, get_config, terminal_log_cb):
-        super().__init__(title="🛠️ Compilateur C/C++", transient_for=parent, default_width=800, default_height=600)
+        super().__init__(title="🛠️ Compilateur C/C++ & Optimiseur", transient_for=parent, default_width=800, default_height=600)
         self.add_css_class("rounded-dialog")
         self.get_config = get_config
         self.terminal_log = terminal_log_cb
         self.current_output_file = None
+        self.ai_engine = BlockAIEngine(config_getter=self.get_config, log_callback=self.terminal_log)
+        
         content = self.get_content_area()
         content.set_spacing(10)
         set_margins(content, 16)
+        
         header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         header_box.append(Gtk.Label(label="Code Source C/C++", css_classes=["heading"], xalign=0))
         self.combo_type = Gtk.ComboBoxText()
@@ -2651,11 +3313,19 @@ class CCompilerDialog(Gtk.Dialog):
         self.combo_type.append_text("Kernel Module (.ko - gcc only)")
         self.combo_type.set_active(0)
         header_box.append(self.combo_type)
+        
         btn_compile = Gtk.Button(label="▶ Compiler", css_classes=["suggested-action"])
         btn_compile.connect("clicked", self._on_compile)
         header_box.append(btn_compile)
+        
+        btn_optimize = Gtk.Button(label="🤖 Optimiser (Eigen3)")
+        btn_optimize.add_css_class("ctrl-btn-warn")
+        btn_optimize.connect("clicked", self._on_optimize_cpp)
+        header_box.append(btn_optimize)
+        
         content.append(header_box)
         content.append(Gtk.Separator())
+        
         self.scrolled = Gtk.ScrolledWindow()
         self.scrolled.set_vexpand(True)
         self.text_view = Gtk.TextView()
@@ -2666,6 +3336,7 @@ class CCompilerDialog(Gtk.Dialog):
         apply_syntax_highlighting(self.text_view, "c")
         self.scrolled.set_child(self.text_view)
         content.append(self.scrolled)
+        
         content.append(Gtk.Label(label="Sortie Compilation:", xalign=0, margin_top=10))
         self.log_view = Gtk.TextView()
         self.log_view.set_editable(False)
@@ -2676,6 +3347,7 @@ class CCompilerDialog(Gtk.Dialog):
         log_scroll.set_size_request(-1, 150)
         log_scroll.set_child(self.log_view)
         content.append(log_scroll)
+        
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, halign=Gtk.Align.END)
         btn_close = Gtk.Button(label="Fermer")
         btn_close.connect("clicked", lambda *_: self.destroy())
@@ -2687,6 +3359,35 @@ class CCompilerDialog(Gtk.Dialog):
         buf.insert(buf.get_end_iter(), f"{text}\n")
         adj = self.log_view.get_parent().get_vadjustment()
         adj.set_value(adj.get_upper())
+
+    def _on_optimize_cpp(self, *_):
+        code = self.text_view.get_buffer().get_text(self.text_view.get_buffer().get_start_iter(), self.text_view.get_buffer().get_end_iter(), True)
+        if not code.strip():
+            self._log("❌ Aucun code à optimiser.")
+            return
+        dialog = Gtk.Dialog(title="Demande d'Optimisation C++", transient_for=self.get_root())
+        dialog.add_css_class("rounded-dialog")
+        dialog.set_default_size(400, 200)
+        content = dialog.get_content_area()
+        content.set_spacing(10)
+        set_margins(content, 16)
+        content.append(Gtk.Label(label="Décrivez l'optimisation souhaitée (ex: vectorisation, réduction mémoire) :", xalign=0))
+        entry_intent = Gtk.Entry(); entry_intent.set_placeholder_text("Optimiser la boucle de calcul..."); content.append(entry_intent)
+        btn_gen = Gtk.Button(label="🤖 Générer Code Optimisé", css_classes=["suggested-action"])
+        content.append(btn_gen)
+        def on_generate(*_):
+            intent = entry_intent.get_text().strip() or "Optimiser les performances numériques avec Eigen3"
+            self._log("🤖 Génération d'optimisation C++ en cours...")
+            dialog.destroy()
+            def _thread():
+                result = self.ai_engine.process_modification("c_block", code, intent, mode="cpp_optimize")
+                if result:
+                    GLib.idle_add(lambda: (self.text_view.get_buffer().set_text(result), self._log("✅ Code optimisé généré."), apply_syntax_highlighting(self.text_view, "c")))
+                else:
+                    GLib.idle_add(lambda: self._log("❌ Échec de la génération d'optimisation."))
+            threading.Thread(target=_thread, daemon=True).start()
+        btn_gen.connect("clicked", on_generate)
+        dialog.present()
 
     def _on_compile(self, *_):
         code = self.text_view.get_buffer().get_text(self.text_view.get_buffer().get_start_iter(), self.text_view.get_buffer().get_end_iter(), True)
@@ -2754,6 +3455,7 @@ class BlockEditorView(Gtk.Box):
         self.ai_engine = ai_engine
         self.current_file, self.blocks, self._cards, self.css_file, self.file_ext = None, [], [], None, "py"
         self.undo_stack, self.redo_stack, self.max_history = [], [], 20
+        
         self.tab_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         self.tab_bar.add_css_class("tab-bar")
         self.tab_bar.set_margin_start(8)
@@ -2761,9 +3463,12 @@ class BlockEditorView(Gtk.Box):
         self.open_tabs = {}
         self.active_tab_path = None
         self.append(self.tab_bar)
+        
         self.file_label = Gtk.Label(label="Select a file"); self.file_label.add_css_class("editor-file-label"); self.file_label.set_xalign(0)
         set_margins(self.file_label, 12); self.append(self.file_label); self.append(Gtk.Separator())
+        
         self._build_toolbar()
+        
         self.scroll = Gtk.ScrolledWindow(); self.scroll.set_vexpand(True); self.scroll.set_hexpand(True); self.scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.blocks_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8); set_margins(self.blocks_box, 16)
         self.scroll.set_child(self.blocks_box); self.append(self.scroll)
@@ -3022,25 +3727,20 @@ window, dialog, popover, scrolledwindow, viewport, button, entry, textview, list
     background-color: #000000 !important;
     color: #4aa3df !important;
 }
-
 /* ── Coins Arrondis pour tous les Popups/Dialogues ─────────────────── */
 dialog, .rounded-dialog, window.dialog, popover {
     border-radius: 12px !important;
 }
-
 /* ── Panel titles ────────────────────────────────────────────────────── */
 .panel-title, .control-section-title { font-size: 11px; font-weight: bold; color: #4aa3df; text-transform: uppercase; min-width: 0; }
-
 /* ── File list ───────────────────────────────────────────────────────── */
 .file-item { font-size: 11px; font-family: monospace; min-width: 0; color: #4aa3df; }
 .file-category { font-size: 10px; color: #4aa3df; min-width: 0; }
 .file-category:hover { color: #6bcfff; }
 .block-name { font-size: 11px; font-family: monospace; min-width: 0; color: #4aa3df; }
-
 /* ── Block cards ─────────────────────────────────────────────────────── */
 .block-card { background-color: #111111 !important; border-radius: 6px; border: 1px solid #2a2a2a; margin-bottom: 4px; min-width: 0; }
 .block-card:hover { border-color: #444; }
-
 /* ── Type badges ─────────────────────────────────────────────────────── */
 .block-badge { font-size: 9px; font-weight: bold; border-radius: 4px; padding: 1px 4px; min-width: 0; }
 .badge-import, .badge-style, .badge-style_rule { background-color: #3498db; color: #fff; }
@@ -3049,28 +3749,22 @@ dialog, .rounded-dialog, window.dialog, popover {
 .badge-template, .badge-template_part, .badge-django_block { background-color: #e67e22; color: #fff; }
 .badge-script, .badge-c_block { background-color: #f1c40f; color: #000; }
 .badge-separator, .badge-other { background-color: #333; color: #aaa; }
-
 /* ── Block action buttons ────────────────────────────────────────────── */
 .block-action-btn { font-size: 10px; background: transparent; border: 1px solid #2a2a2a; border-radius: 4px; padding: 2px 5px; min-width: 0; color: #4aa3df; }
 .block-action-btn:hover { background-color: #1e1e1e; }
-
 /* ── Code editor ─────────────────────────────────────────────────────── */
 .code-editor { font-family: monospace; font-size: 9px; background-color: #050505 !important; color: #4aa3df; min-width: 0; }
-
 /* ── Save buttons ────────────────────────────────────────────────────── */
 .save-btn, .save-file-btn { background-color: #1a4a2a; color: #2ecc71; border: 1px solid #2ecc71; border-radius: 4px; min-width: 0; }
 .cancel-btn { background-color: #2a1a1a; color: #e74c3c; border: 1px solid #e74c3c; border-radius: 4px; min-width: 0; }
-
 /* ── Control panel buttons ───────────────────────────────────────────── */
 .ctrl-btn, .ctrl-btn-small, .toolbar-btn { background-color: #1a1a2a; border: 1px solid #333; border-radius: 4px; font-size: 10px; padding: 3px 6px; min-width: 0; color: #4aa3df; }
 .ctrl-btn-start { background-color: #0a2a0a; color: #2ecc71; border-color: #2ecc71; border-radius: 4px; font-size: 10px; padding: 3px 6px; min-width: 0; }
 .ctrl-btn-stop { background-color: #2a0a0a; color: #e74c3c; border-color: #e74c3c; border-radius: 4px; font-size: 10px; padding: 3px 6px; min-width: 0; }
 .ctrl-btn-warn { background-color: #2a1f0a; color: #f39c12; border-color: #f39c12; border-radius: 4px; font-size: 10px; padding: 3px 6px; min-width: 0; }
-
 /* ── Status indicators ───────────────────────────────────────────────── */
 .status-dot-off { color: #333; }
 .status-dot-on  { color: #2ecc71; }
-
 /* ── Terminal Panel ──────────────────────────────────────────────────── */
 .terminal-panel { background-color: #000000 !important; border-top: 1px solid #3c3c3c; }
 .terminal-title { font-size: 11px; font-weight: bold; color: #4aa3df; text-transform: uppercase; }
@@ -3078,12 +3772,10 @@ dialog, .rounded-dialog, window.dialog, popover {
 .terminal-prompt { color: #2ecc71; font-family: 'Fira Code', 'Consolas', 'Monaco', 'Courier New', monospace; font-weight: bold; font-size: 12px; margin-right: 4px; }
 .terminal-input { background-color: #0d0d0d !important; color: #4aa3df; border: 1px solid #3c3c3c; border-radius: 4px; font-family: 'Fira Code', 'Consolas', 'Monaco', 'Courier New', monospace; font-size: 12px; padding: 4px 8px; }
 .terminal-input:focus { border-color: #007acc; outline: none; }
-
 /* ── Editor toolbar ──────────────────────────────────────────────────── */
 .toolbar-label { font-size: 11px; color: #4aa3df; min-width: 0; }
 .block-count-badge { font-size: 10px; font-weight: bold; background-color: #1a1a2a; color: #61afef; border-radius: 4px; padding: 1px 6px; min-width: 0; }
 .editor-file-label { font-size: 12px; font-weight: bold; min-width: 0; color: #4aa3df; }
-
 /* ── Bottom accent bar of cards ──────────────────────────────────────── */
 .block-accent-bar { min-height: 2px; min-width: 0; }
 .accent-function, .accent-script_block { background-color: #9b59b6; }
@@ -3093,7 +3785,6 @@ dialog, .rounded-dialog, window.dialog, popover {
 .accent-script, .accent-c_block { background-color: #f1c40f; }
 .accent-separator { background-color: #333; }
 .accent-other, .accent-template_part { background-color: #222; }
-
 /* ── Tabs System ─────────────────────────────────────────────────────── */
 .tab-bar { background-color: #0a0a0a !important; border-bottom: 1px solid #333; min-height: 35px; }
 .tab-button { background-color: #151515; border-radius: 4px 4px 0 0; padding: 4px 8px; cursor: pointer; border: 1px solid #333; border-bottom: none; }
@@ -3101,7 +3792,6 @@ dialog, .rounded-dialog, window.dialog, popover {
 .tab-button.active-tab { background-color: #000000 !important; border-top: 2px solid #007acc; }
 .tab-button label { color: #4aa3df; font-size: 12px; }
 .tab-button button { min-width: 20px; min-height: 20px; padding: 0; }
-
 /* ── Light theme override (si activé manuellement) ───────────────────── */
 .theme-light window, .theme-light dialog, .theme-light popover { background-color: #f5f5f5; color: #222; }
 .theme-light .block-card { background-color: #ffffff; border-color: #ddd; }
@@ -3115,7 +3805,6 @@ dialog, .rounded-dialog, window.dialog, popover {
 .theme-light .tab-button { background-color: #f0f0f0; border-color: #ccc; }
 .theme-light .tab-button label { color: #333; }
 .theme-light .tab-button.active-tab { background-color: #f5f5f5; border-top-color: #007acc; }
-
 /* Bouton IA */
 .btn-ai {
     background-color: #2a1a3a;
@@ -3125,7 +3814,6 @@ dialog, .rounded-dialog, window.dialog, popover {
 .btn-ai:hover {
     background-color: #3a2a4a;
 }
-
 /* WhatsApp Style Button */
 .whatsapp-btn {
     background-color: #25D366;
@@ -3142,6 +3830,23 @@ dialog, .rounded-dialog, window.dialog, popover {
 }
 .whatsapp-btn image {
     color: white;
+}
+/* ── Nouveaux Tags pour le Constructeur de Commandes ───────────────── */
+.option-tag, .arg-tag {
+    background-color: #1a4a2a;
+    color: #2ecc71;
+    border: 1px solid #2ecc71;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 11px;
+    font-family: monospace;
+}
+.options-container, .args-container {
+    background-color: #0a0a0a;
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 4px;
+    min-height: 30px;
 }
 """
 
@@ -3256,7 +3961,9 @@ class GykhamineStudioApp(Adw.Application):
         self._show_toast(f"📂 Project opened: {path.name}")
 
     def _on_file_selected(self, path: Path): self.editor_view.load_file(path)
+
     def _on_file_created(self, path: Path): self._show_toast(f"✅ Created: {path.name}"); self.editor_view.load_file(path)
+
     def _on_file_imported(self, path: Path): self._show_toast(f"📥 Imported: {path.name}"); self.editor_view.load_file(path)
 
     def _run_python_file(self, path: Path):
