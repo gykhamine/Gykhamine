@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════╗
-║           GYKHAMINE STUDIO — v3.3.1 (SSL & Full DB)      ║
+║           GYKHAMINE STUDIO — v3.3.1      ║
 ║     No-code visual editor for Gykhamine capsules         ║
 ║     Developed for the GCI project — Brazzaville, Congo   ╚
 Dependencies : python3-gi, gtk4, libadwaita-1, zipfile, pandas, openpyxl, requests, python-dotenv
