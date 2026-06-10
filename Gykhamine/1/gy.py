@@ -24,6 +24,9 @@ except ImportError:
     def load_dotenv(**kwargs):
         pass
 
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════════════
 #  GTK4 UTILITIES
 # ═══════════════════════════════════════════════════════════════════════
@@ -45,6 +48,63 @@ LOGO_PATH  = Path("/usr/share/Gykhamine/icon/gykhamine_logo.png")
 env_path = SCRIPT_DIR / ".env"
 if env_path.exists():
     load_dotenv(dotenv_path=env_path)
+    
+    
+
+# ═══════════════════════════════════════════════════════════════════════
+#  INSTALLATION AUTOMATIQUE DES FICHIERS .DESKTOP (SUDO)
+# ═══════════════════════════════════════════════════════════════════════
+def install_desktop_files_startup():
+    """Copie les fichiers .desktop du dossier ./bureau vers /usr/share/applications/ au démarrage."""
+    source_dir = SCRIPT_DIR / "bureau"
+    dest_dir = Path("/usr/share/applications")
+    
+    if not source_dir.exists():
+        return
+        
+    desktop_files = list(source_dir.glob("*.desktop"))
+    if not desktop_files:
+        return
+
+    files_to_copy = []
+    for f in desktop_files:
+        if not (dest_dir / f.name).exists():
+            files_to_copy.append(f)
+    
+    if not files_to_copy:
+        return
+
+    print(f"📂 Détection de {len(files_to_copy)} raccourci(s) à installer...")
+    
+    # Tentative de copie directe
+    remaining = []
+    for f in files_to_copy:
+        try:
+            if not os.access(dest_dir, os.W_OK):
+                raise PermissionError("Accès refusé")
+            shutil.copy2(f, dest_dir / f.name)
+            os.chmod(dest_dir / f.name, 0o644)
+            print(f"   ✅ Copié : {f.name}")
+        except (PermissionError, OSError):
+            remaining.append(f)
+
+    # Si des fichiers restent, on utilise SUDO via subprocess
+    if remaining:
+        cmd_parts = ["sudo", "bash", "-c"]
+        bash_cmd = ""
+        for f in remaining:
+            bash_cmd += f"cp '{f}' '{dest_dir}/' && chmod 644 '{dest_dir}/{f.name}' ; "
+        
+        try:
+            print("⚠️ Droits insuffisants. Demande de privilèges sudo...")
+            subprocess.run(cmd_parts + [bash_cmd], check=True)
+            print("✅ Installation réussie via sudo.")
+        except Exception as e:
+            print(f"❌ Échec de l'installation des raccourcis: {e}")
+
+# Exécution immédiate au lancement du script
+install_desktop_files_startup()
+
 
 # 2. Définition des valeurs par défaut (utilisées si .env ou DB sont vides)
 # Note: os.getenv récupère les variables du .env chargé précédemment
