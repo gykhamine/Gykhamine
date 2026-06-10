@@ -2270,60 +2270,52 @@ class ControlPanel(Gtk.Box):
     # ═══════════════════════════════════════════════════════════════════════
     def _generate_ssl(self, *_):
         cfg = self.get_config()
-        cert_path = cfg.get("gunicorn_ssl_cert_path", "")
-        key_path = cfg.get("gunicorn_ssl_key_path", "")
+        
+        # On force les chemins vers le dossier système Nginx comme demandé
+        cert_path = "/etc/pki/nginx/server.crt"
+        key_path = "/etc/pki/nginx/private/server.key"
+        
+        # Mise à jour de la config pour que Gunicorn utilise aussi ces fichiers s'il est lancé ensuite
+        cfg["gunicorn_ssl_cert_path"] = cert_path
+        cfg["gunicorn_ssl_key_path"] = key_path
+        save_config(cfg)
 
-        if not cert_path or not key_path:
-            self.terminal._log("❌ Chemins SSL non configurés. Veuillez les définir dans les Paramètres.")
-            self.show_toast("❌ Configurez les chemins SSL d'abord")
-            return
-
-        # Création des dossiers parents si nécessaires
-        Path(cert_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(key_path).parent.mkdir(parents=True, exist_ok=True)
-
-        # Commande OpenSSL pour générer un certificat auto-signé valide 365 jours
-        # -nodes : pas de mot de passe sur la clé privée (requis pour Gunicorn)
-        cmd = f'openssl req -x509 -newkey rsa:4096 -nodes -keyout "{key_path}" -out "{cert_path}" -days 365 -subj "/C=CG/ST=Brazzaville/L=Brazzaville/O=Gykhamine/OU=IT/CN=localhost"'
-
-        self.terminal._log("🔑 Génération du certificat SSL auto-signé en cours...")
-        self.terminal._log(f"📜 Cmd: {cmd}")
-
-        try:
-            proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            stdout, stderr = proc.communicate()
-
-            if proc.returncode == 0:
-                self.terminal._log(f"✅ Certificat SSL généré avec succès !")
-                self.terminal._log(f"   📄 Certificat : {cert_path}")
-                self.terminal._log(f"   🔑 Clé privée : {key_path}")
-                self.show_toast("✅ Certificat SSL généré")
+        self.terminal._log("🔑 Génération du certificat SSL système en cours...")
+        
+        def _thread():
+            try:
+                # 1. Création des dossiers systèmes avec SUDO
+                GLib.idle_add(self.terminal._log, f"▶ sudo mkdir -p /etc/pki/nginx/private")
+                subprocess.run(["sudo", "mkdir", "-p", "/etc/pki/nginx/private"], check=True)
                 
-                # Activation automatique du SSL dans la config après génération
-                cfg["gunicorn_ssl_enabled"] = True
-                save_config(cfg)
-                self.terminal._log("ℹ️ Le SSL a été automatiquement activé dans la configuration.")
+                # 2. Génération du certificat directement dans le dossier système
+                cmd = f'sudo openssl req -x509 -newkey rsa:4096 -nodes -keyout "{key_path}" -out "{cert_path}" -days 365 -subj "/C=CG/ST=Brazzaville/L=Brazzaville/O=Gykhamine/OU=IT/CN=localhost"'
                 
-                # Copie automatique pour Nginx si les chemins sont différents ou si on veut les synchroniser
-                nginx_cert = cfg.get("nginx_ssl_cert", "")
-                nginx_key = cfg.get("nginx_ssl_key", "")
-                if nginx_cert and nginx_key:
-                    try:
-                        shutil.copy2(cert_path, nginx_cert)
-                        shutil.copy2(key_path, nginx_key)
-                        self.terminal._log(f"📋 Certificats copiés pour Nginx vers {nginx_cert} et {nginx_key}")
-                    except Exception as e:
-                        self.terminal._log(f"⚠️ Impossible de copier les certificats pour Nginx automatiquement : {e}")
-                        
-            else:
-                self.terminal._log(f"❌ Erreur OpenSSL : {stderr.strip()}")
-                self.show_toast("❌ Échec de la génération SSL")
-        except FileNotFoundError:
-            self.terminal._log("❌ La commande 'openssl' est introuvable. Veuillez installer OpenSSL (ex: sudo apt install openssl).")
-            self.show_toast("❌ OpenSSL non installé")
-        except Exception as e:
-            self.terminal._log(f"❌ Exception: {e}")
-            self.show_toast("❌ Erreur lors de la génération")
+                GLib.idle_add(self.terminal._log, f"📜 Cmd: {cmd}")
+                proc = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                
+                if proc.returncode == 0:
+                    GLib.idle_add(self.terminal._log, f"✅ Certificat SSL généré avec succès dans /etc/pki/nginx/")
+                    GLib.idle_add(self.terminal._log, f"   📄 Certificat : {cert_path}")
+                    GLib.idle_add(self.terminal._log, f"   🔑 Clé privée : {key_path}")
+                    
+                    # Activation automatique du SSL dans la config
+                    cfg["gunicorn_ssl_enabled"] = True
+                    cfg["nginx_ssl_cert"] = cert_path
+                    cfg["nginx_ssl_key"] = key_path
+                    save_config(cfg)
+                    
+                    GLib.idle_add(self.show_toast, "✅ Certificat SSL Système généré")
+                    GLib.idle_add(self.terminal._log, "ℹ️ Les chemins Nginx et Gunicorn ont été mis à jour automatiquement.")
+                else:
+                    GLib.idle_add(self.terminal._log, f"❌ Erreur OpenSSL : {proc.stderr.strip()}")
+                    GLib.idle_add(self.show_toast, "❌ Échec de la génération SSL")
+                    
+            except Exception as e:
+                GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+                GLib.idle_add(self.show_toast, "❌ Erreur lors de la génération")
+        
+        threading.Thread(target=_thread, daemon=True).start()
     # ═══════════════════════════════════════════════════════════════════════
 
     # ... (Les méthodes PostgreSQL, Redis, NFS, Nginx, SSH, Venv restent inchangées pour la brièveté, mais sont incluses dans le fichier final) ...
@@ -2331,72 +2323,111 @@ class ControlPanel(Gtk.Box):
         cfg = self.get_config()
         device = cfg.get("pg_device", "")
         mount_point = cfg.get("pg_mount_point", "/var/lib/pgsql/data")
+        
         if not device:
             self.show_toast("❌ Veuillez sélectionner une partition dans les paramètres")
             return
-        self.terminal._log("🔧 === Initialisation PostgreSQL ===")
+
+        self.terminal._log("🔧 === Initialisation PostgreSQL (Mode Auto-Sudo) ===")
         self.terminal._log(f"📁 Point de montage: {mount_point}")
+
         def _thread():
             try:
-                GLib.idle_add(self.terminal._log, f"▶ mkdir -p {mount_point}")
-                subprocess.run(["mkdir", "-p", mount_point], check=True)
+                # 1. Création du dossier avec SUDO pour éviter les erreurs de permission
+                GLib.idle_add(self.terminal._log, f"▶ sudo mkdir -p {mount_point}")
+                subprocess.run(["sudo", "mkdir", "-p", mount_point], check=True)
+                
+                # 2. Vérification du montage
                 mount_check = subprocess.run(["mountpoint", "-q", mount_point], capture_output=True)
                 if mount_check.returncode != 0:
-                    GLib.idle_add(self.terminal._log, f"▶ Montage de {device} sur {mount_point}")
-                    subprocess.run(["sudo", "mount", device, mount_point], check=True)
-                else: GLib.idle_add(self.terminal._log, "✅ Déjà monté")
+                    if device:
+                        GLib.idle_add(self.terminal._log, f"▶ Montage de {device} sur {mount_point}")
+                        subprocess.run(["sudo", "mount", device, mount_point], check=True)
+                    else:
+                         GLib.idle_add(self.terminal._log, "⚠️ Aucun périphérique sélectionné, utilisation du dossier local.")
+                else: 
+                    GLib.idle_add(self.terminal._log, "✅ Déjà monté")
+
+                # 3. Initialisation si nécessaire
                 pg_version_path = Path(mount_point) / "PG_VERSION"
                 if not pg_version_path.exists():
-                    GLib.idle_add(self.terminal._log, "▶ Initialisation de la base (initdb)...")
+                    GLib.idle_add(self.terminal._log, "▶ Préparation des droits (chown/chmod)...")
+                    # Donner les droits à postgres avec SUDO
                     subprocess.run(["sudo", "chown", "-R", "postgres:postgres", mount_point], check=True)
                     subprocess.run(["sudo", "chmod", "700", mount_point], check=True)
+                    
+                    GLib.idle_add(self.terminal._log, "▶ Initialisation de la base (initdb)...")
                     subprocess.run(["sudo", "-u", "postgres", "initdb", "-D", mount_point], check=True)
-                else: GLib.idle_add(self.terminal._log, "✅ Base de données déjà initialisée")
+                else: 
+                    GLib.idle_add(self.terminal._log, "✅ Base de données déjà initialisée")
+                    # S'assurer que les droits sont bons même si déjà init
+                    subprocess.run(["sudo", "chown", "-R", "postgres:postgres", mount_point], check=True)
+
                 GLib.idle_add(self.terminal._log, "▶ Démarrage de PostgreSQL...")
                 status = subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", mount_point, "status"], capture_output=True)
                 if status.returncode != 0:
                     subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", mount_point, "start"], check=True)
                     GLib.idle_add(self.terminal._log, "✅ PostgreSQL démarré")
-                else: GLib.idle_add(self.terminal._log, "✅ PostgreSQL déjà en cours d'exécution")
+                else: 
+                    GLib.idle_add(self.terminal._log, "✅ PostgreSQL déjà en cours d'exécution")
+                
                 GLib.idle_add(self.show_toast, "✅ Initialisation PostgreSQL réussie")
                 GLib.idle_add(self.terminal._log, "=== OK ===")
+                
             except subprocess.CalledProcessError as e:
                 GLib.idle_add(self.terminal._log, f"❌ Erreur lors de l'exécution: {e}")
-                GLib.idle_add(self.show_toast, "❌ Échec de l'initialisation")
+                GLib.idle_add(self.terminal._log, "💡 Astuce: Assurez-vous que votre utilisateur a les droits sudo.")
+                GLib.idle_add(self.show_toast, "❌ Échec de l'initialisation (Vérifiez sudo)")
             except Exception as e:
                 GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        
         threading.Thread(target=_thread, daemon=True).start()
-
+        
     def _run_pg_creatdb(self, *_):
         cfg = self.get_config()
         db_name = cfg.get("pg_db_name", "ma_base")
         db_user = cfg.get("pg_db_user", "mon_user")
         db_password = cfg.get("pg_db_password", "mot_de_passe").replace("'", "''")
         self.terminal._log("➕ === Création Base & Utilisateur ===")
+        
         def _thread():
             try:
+                # Vérification utilisateur avec SUDO
                 check_user = subprocess.run(["sudo", "-u", "postgres", "psql", "-tAc", f"SELECT 1 FROM pg_roles WHERE rolname='{db_user}'"], capture_output=True, text=True).stdout.strip()
+                
                 if check_user != "1":
                     GLib.idle_add(self.terminal._log, f"▶ Création de l'utilisateur {db_user}")
                     subprocess.run(["sudo", "-u", "postgres", "psql", "-c", f"CREATE USER {db_user} WITH PASSWORD '{db_password}';"], check=True)
-                else: GLib.idle_add(self.terminal._log, "✅ Utilisateur déjà existant")
+                else: 
+                    GLib.idle_add(self.terminal._log, "✅ Utilisateur déjà existant")
+
+                # Vérification base avec SUDO
                 check_db = subprocess.run(["sudo", "-u", "postgres", "psql", "-tAc", f"SELECT 1 FROM pg_database WHERE datname='{db_name}'"], capture_output=True, text=True).stdout.strip()
+                
                 if check_db != "1":
                     GLib.idle_add(self.terminal._log, f"▶ Création de la base {db_name}")
                     subprocess.run(["sudo", "-u", "postgres", "createdb", "-O", db_user, db_name], check=True)
-                else: GLib.idle_add(self.terminal._log, "✅ Base déjà existante")
+                else: 
+                    GLib.idle_add(self.terminal._log, "✅ Base déjà existante")
+
                 GLib.idle_add(self.terminal._log, "▶ Attribution des privilèges...")
                 subprocess.run(["sudo", "-u", "postgres", "psql", "-c", f"GRANT ALL PRIVILEGES ON DATABASE {db_name} TO {db_user};"], check=True)
                 subprocess.run(["sudo", "-u", "postgres", "psql", "-d", db_name, "-c", f"GRANT USAGE, CREATE ON SCHEMA public TO {db_user};"], check=True)
                 subprocess.run(["sudo", "-u", "postgres", "psql", "-d", db_name, "-c", f"ALTER SCHEMA public OWNER TO {db_user};"], check=True)
+                
                 GLib.idle_add(self.show_toast, "✅ Base et utilisateur configurés")
                 GLib.idle_add(self.terminal._log, "=== OK ===")
+                
             except subprocess.CalledProcessError as e:
                 GLib.idle_add(self.terminal._log, f"❌ Erreur SQL: {e}")
                 GLib.idle_add(self.show_toast, "❌ Échec de la création")
             except Exception as e:
                 GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        
         threading.Thread(target=_thread, daemon=True).start()
+
+
+
 
     def _run_pg_rundb(self, *_):
         cfg = self.get_config()
@@ -2404,32 +2435,48 @@ class ControlPanel(Gtk.Box):
         pgdata = cfg.get("pg_mount_point", "/var/lib/pgsql/data")
         bind_ip = cfg.get("pg_bind_ip", "127.0.0.1")
         listen_addr = "*" if bind_ip == "0.0.0.0" else bind_ip
+        
         if not device:
             self.show_toast("❌ Veuillez sélectionner une partition dans les paramètres")
             return
+
         self.terminal._log("🚀 === Démarrage et Configuration IP ===")
+        
         def _thread():
             try:
-                subprocess.run(["mkdir", "-p", pgdata], check=True)
+                # 1. Création du dossier avec SUDO (Correction du bug mkdir)
+                GLib.idle_add(self.terminal._log, f"▶ sudo mkdir -p {pgdata}")
+                subprocess.run(["sudo", "mkdir", "-p", pgdata], check=True)
+                
+                # 2. Montage
                 mount_check = subprocess.run(["mountpoint", "-q", pgdata], capture_output=True)
                 if mount_check.returncode != 0:
                     GLib.idle_add(self.terminal._log, f"▶ Montage de {device} sur {pgdata}")
                     subprocess.run(["sudo", "mount", device, pgdata], check=True)
                 else:
                     GLib.idle_add(self.terminal._log, "✅ Déjà monté")
+
+                # 3. Démarrage PostgreSQL
                 status = subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", pgdata, "status"], capture_output=True)
                 is_running = (status.returncode == 0)
+                
                 if not is_running:
                     GLib.idle_add(self.terminal._log, "▶ Démarrage de PostgreSQL...")
                     subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", pgdata, "start"], check=True)
                 else:
                     GLib.idle_add(self.terminal._log, "✅ PostgreSQL déjà en cours d'exécution")
+
+                # 4. Configuration IP
                 GLib.idle_add(self.terminal._log, f"▶ Configuration de listen_addresses sur '{listen_addr}'...")
                 subprocess.run(["sudo", "-u", "postgres", "psql", "-c", f"ALTER SYSTEM SET listen_addresses = '{listen_addr}';"], check=True)
+                
                 if bind_ip == "0.0.0.0":
                     pg_hba_path = Path(pgdata) / "pg_hba.conf"
                     GLib.idle_add(self.terminal._log, "🌐 Mode Réseau détecté. Automatisation de pg_hba.conf...")
-                    hba_content = pg_hba_path.read_text(encoding="utf-8")
+                    
+                    # Lecture et modification sécurisée via sudo tee
+                    hba_content = subprocess.run(["sudo", "cat", str(pg_hba_path)], capture_output=True, text=True).stdout
+                    
                     if "0.0.0.0/0" not in hba_content:
                         GLib.idle_add(self.terminal._log, "▶ Ajout de la règle d'accès distant dans pg_hba.conf...")
                         rule = "\n# --- Ajouté automatiquement par Gykhamine Studio ---\nhost    all             all             0.0.0.0/0               scram-sha-256\n"
@@ -2437,18 +2484,22 @@ class ControlPanel(Gtk.Box):
                         GLib.idle_add(self.terminal._log, "✅ Règle pg_hba.conf ajoutée avec succès.")
                     else:
                         GLib.idle_add(self.terminal._log, "✅ La règle d'accès distant est déjà présente dans pg_hba.conf.")
-                GLib.idle_add(self.terminal._log, "▶ Redémarrage propre pour appliquer la configuration...")
-                subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", pgdata, "restart", "-m", "fast"], check=True)
+                    
+                    GLib.idle_add(self.terminal._log, "▶ Redémarrage propre pour appliquer la configuration...")
+                    subprocess.run(["sudo", "-u", "postgres", "pg_ctl", "-D", pgdata, "restart", "-m", "fast"], check=True)
+                
                 GLib.idle_add(self.show_toast, "✅ PostgreSQL démarré et IP configurée")
                 GLib.idle_add(self.terminal._log, "=== READY ===")
                 GLib.idle_add(self._set_dot, "postgresql", True)
+                
             except subprocess.CalledProcessError as e:
                 GLib.idle_add(self.terminal._log, f"❌ Erreur: {e}")
                 GLib.idle_add(self.show_toast, "❌ Échec du démarrage/config")
             except Exception as e:
                 GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        
         threading.Thread(target=_thread, daemon=True).start()
-
+        
     def _run_pg_stopdb(self, *_):
         cfg = self.get_config()
         pgdata = cfg.get("pg_mount_point", "/var/lib/pgsql/data")
@@ -2536,12 +2587,24 @@ class ControlPanel(Gtk.Box):
         export_dir = cfg.get("nfs_export_dir", "/run/media/gykhamine/GY/gy/media")
         mode = cfg.get("nfs_server_mode", "local")
         lan_network = cfg.get("nfs_lan_network", "192.168.1.0/24") if mode == "network" else "127.0.0.1"
+        
         self.terminal._log("📁 === Démarrage du Serveur NFS ===")
+        
         def _thread():
             try:
-                GLib.idle_add(self.terminal._log, f"▶ Création du dossier d'export : {export_dir}")
-                subprocess.run(["mkdir", "-p", export_dir], check=True)
-                subprocess.run(["chmod", "777", export_dir], check=True)
+                GLib.idle_add(self.terminal._log, f"▶ Vérification/Création du dossier d'export : {export_dir}")
+                # Création du dossier (si possible)
+                try:
+                    os.makedirs(export_dir, exist_ok=True)
+                except Exception as e:
+                    GLib.idle_add(self.terminal._log, f"⚠️ Impossible de créer le dossier automatiquement : {e}")
+                
+                # Tentative de chmod, mais on ignore l'erreur si c'est un système de fichiers non-Linux (NTFS/exFAT)
+                try:
+                    subprocess.run(["chmod", "777", export_dir], check=True)
+                except subprocess.CalledProcessError:
+                    GLib.idle_add(self.terminal._log, "⚠️ chmod ignoré (support non-Linux ou permissions restreintes).")
+                
                 GLib.idle_add(self.terminal._log, "▶ Mise à jour de /etc/exports...")
                 exports_path = "/etc/exports"
                 try:
@@ -2549,27 +2612,38 @@ class ControlPanel(Gtk.Box):
                         lines = f.readlines()
                 except FileNotFoundError:
                     lines = []
+                
+                # Nettoyer les anciennes entrées Gykhamine
                 lines = [l for l in lines if not l.strip().startswith("# --- Gykhamine NFS ---") and not l.strip().startswith(export_dir)]
+                
                 new_entry = f"# --- Gykhamine NFS ---\n{export_dir} {lan_network}(rw,sync,no_subtree_check,no_root_squash)\n"
                 lines.append(new_entry)
                 content = "".join(lines)
-                subprocess.run(["sudo", "tee", exports_path], input=content, text=True, check=True)
+                
+                # Écriture avec SUDO
+                proc = subprocess.run(["sudo", "tee", exports_path], input=content, text=True, capture_output=True)
+                if proc.returncode != 0:
+                    raise Exception(f"Erreur sudo tee: {proc.stderr}")
+
                 GLib.idle_add(self.terminal._log, "▶ Application de la configuration (exportfs -ra)...")
                 subprocess.run(["sudo", "exportfs", "-ra"], check=True)
+                
                 GLib.idle_add(self.terminal._log, "▶ Redémarrage du service nfs-server...")
                 subprocess.run(["sudo", "systemctl", "restart", "nfs-server.service"], check=True)
+                
                 GLib.idle_add(self._set_dot, "nfs_server", True)
                 GLib.idle_add(self.show_toast, "✅ Serveur NFS démarré")
                 GLib.idle_add(self.terminal._log, f"=== READY : Export {export_dir} vers {lan_network} ===")
+                
             except subprocess.CalledProcessError as e:
                 GLib.idle_add(self._set_dot, "nfs_server", False)
                 GLib.idle_add(self.terminal._log, f"❌ Erreur: {e}")
-                GLib.idle_add(self.show_toast, "❌ Échec du démarrage NFS")
+                GLib.idle_add(self.show_toast, "❌ Échec du démarrage NFS (Vérifiez sudo)")
             except Exception as e:
                 GLib.idle_add(self._set_dot, "nfs_server", False)
                 GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        
         threading.Thread(target=_thread, daemon=True).start()
-
     def _run_nfs_server_stop(self, *_):
         cfg = self.get_config()
         export_dir = cfg.get("nfs_export_dir", "/run/media/gykhamine/GY/gy/media")
