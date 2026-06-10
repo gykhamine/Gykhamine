@@ -105,7 +105,50 @@ def install_desktop_files_startup():
 # Exécution immédiate au lancement du script
 install_desktop_files_startup()
 
+# ═══════════════════════════════════════════════════════════════════════
+#  MONTAGE AUTOMATIQUE DE LA PARTITION GY (SUDO)
+# ═══════════════════════════════════════════════════════════════════════
+def auto_mount_gy():
+    """
+    Monte la partition Gy si elle n'est pas déjà montée.
+    """
+    # Configuration
+    GY_DEVICE = "/dev/sda5"  # Vérifiez que c'est bien sda5 avec 'lsblk'
+    GY_MOUNT_POINT = "/run/media/gykhamine/GYl"  # CORRECTION ICI (enlevé le 'l' final)
+    
+    # 1. Vérification et Montage
+    is_mounted = False
+    try:
+        result = subprocess.run(["mountpoint", "-q", GY_MOUNT_POINT], capture_output=True)
+        if result.returncode == 0:
+            is_mounted = True
+            print(f"✅ Partition GY déjà montée sur {GY_MOUNT_POINT}")
+    except Exception:
+        pass
 
+    if not is_mounted:
+        print(f"📂 Tentative de montage de {GY_DEVICE} sur {GY_MOUNT_POINT}...")
+        try:
+            # Création du dossier avec sudo si nécessaire pour éviter l'erreur Permission denied
+            subprocess.run(["sudo", "mkdir", "-p", GY_MOUNT_POINT], check=True, capture_output=True)
+            
+            # Montage avec sudo
+            subprocess.run(["sudo", "mount", GY_DEVICE, GY_MOUNT_POINT], check=True, capture_output=True)
+            print("✅ Partition montée avec succès.")
+            is_mounted = True
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Échec du montage: {e.stderr.decode().strip()}")
+            return False
+        except Exception as e:
+            print(f"❌ Erreur inattendue lors du montage: {e}")
+            return False
+
+    return is_mounted
+
+# Exécution immédiate au lancement du script
+if not auto_mount_gy():
+    print("⚠️ Le montage automatique a échoué. L'application va continuer mais certains chemins GY peuvent être inaccessibles.")
+    
 # 2. Définition des valeurs par défaut (utilisées si .env ou DB sont vides)
 # Note: os.getenv récupère les variables du .env chargé précédemment
 DEFAULT_CONFIG = {
