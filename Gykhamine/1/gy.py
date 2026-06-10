@@ -3392,29 +3392,64 @@ class CCompilerDialog(Gtk.Dialog):
         if not code.strip():
             self._log("❌ Aucun code à compiler.")
             return
+
         import tempfile
-        fd, src_path = tempfile.mkstemp(suffix=".c")
+        
+        # Détection basique du langage C++
+        is_cpp = any(kw in code for kw in ["#include <iostream>", "std::", "class ", "namespace ", "#include <vector>"])
+        
+        # Si c'est du C++, on utilise .cpp, sinon .c
+        suffix = ".cpp" if is_cpp else ".c"
+        fd, src_path = tempfile.mkstemp(suffix=suffix)
+        
         try:
-            with os.fdopen(fd, 'w') as f: f.write(code)
+            with os.fdopen(fd, 'w') as f: 
+                f.write(code)
+
             output_type = self.combo_type.get_active()
             out_ext = ".out"
-            gcc_flags = []
-            if output_type == 1: out_ext = ".so"; gcc_flags = ["-shared", "-fPIC"]
-            elif output_type == 2: out_ext = ".ko"; gcc_flags = ["-c"]
-            out_path = src_path.replace(".c", out_ext)
+            compiler_flags = []
+            
+            # Choix du compilateur
+            compiler = "g++" if is_cpp else "gcc"
+
+            if output_type == 1: 
+                out_ext = ".so"
+                # -fPIC est nécessaire pour les bibliothèques partagées dans les deux langages
+                compiler_flags = ["-shared", "-fPIC"]
+            elif output_type == 2: 
+                out_ext = ".ko"
+                # Les modules kernel sont généralement en C pur, mais on laisse l'option
+                compiler_flags = ["-c"]
+                if is_cpp:
+                    self._log("⚠️ Attention : Les modules kernel (.ko) sont rarement écrits en C++.")
+
+            # Nom du fichier de sortie
+            out_path = src_path.replace(suffix, out_ext)
             self.current_output_file = out_path
-            cmd = ["gcc"] + gcc_flags + [src_path, "-o", out_path]
-            if output_type == 1: cmd.append("-lm")
-            self._log(f"▶ Compilation: {' '.join(cmd)}")
+            
+            cmd = [compiler] + compiler_flags + [src_path, "-o", out_path]
+            
+            # Ajout des bibliothèques standards si nécessaire
+            if output_type == 1: 
+                cmd.append("-lm") # Math library
+            if is_cpp and output_type != 2: 
+                # g++ lie automatiquement libstdc++, mais c'est une bonne pratique de s'en assurer
+                pass 
+
+            self._log(f"▶ Compilation ({compiler}): {' '.join(cmd)}")
             proc = subprocess.run(cmd, capture_output=True, text=True)
+            
             if proc.returncode == 0:
                 self._log(f"✅ Succès! Fichier généré: {out_path}")
                 self._log(f"💡 Vous pouvez le trouver dans le dossier temporaire ou le déplacer.")
             else:
                 self._log(f"❌ Erreur de compilation:")
                 self._log(proc.stderr)
-        finally: pass
-
+        finally:
+            # Nettoyage du fichier source temporaire si besoin, 
+            # mais on le laisse souvent pour déboguer si ça échoue
+            pass
 class TabButton(Gtk.Box):
     def __init__(self, file_path, on_close, on_activate):
         super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
