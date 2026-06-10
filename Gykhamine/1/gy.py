@@ -113,8 +113,8 @@ def auto_mount_gy():
     Monte la partition Gy si elle n'est pas déjà montée.
     """
     # Configuration
-    GY_DEVICE = "/dev/sda5"  # Vérifiez que c'est bien sda5 avec 'lsblk'
-    GY_MOUNT_POINT = "/run/media/gykhamine/GYl"  # CORRECTION ICI (enlevé le 'l' final)
+    GY_DEVICE = "/dev/sda2"  # Vérifiez que c'est bien sda5 avec 'lsblk'
+    GY_MOUNT_POINT = "/run/media/gykhamine/GY"  # CORRECTION ICI (enlevé le 'l' final)
     
     # 1. Vérification et Montage
     is_mounted = False
