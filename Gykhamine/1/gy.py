@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════╗
-║           GYKHAMINE STUDIO — v3.3.1      ║
+║           GYKHAMINE STUDIO — v3.3.1 (SSL & Full DB)      ║
 ║     No-code visual editor for Gykhamine capsules         ║
 ║     Developed for the GCI project — Brazzaville, Congo   ╚
 Dependencies : python3-gi, gtk4, libadwaita-1, zipfile, pandas, openpyxl, requests, python-dotenv
@@ -668,7 +668,7 @@ OBJECTIF : {format_instruction}
         
         try:
             self.log(f"🤖 Envoi de la requête IA ({mode})...")
-            response = requests.post(url, json=payload, timeout=120)
+            response = requests.post(url, json=payload, timeout=12000)
             if response.status_code == 200:
                 data = response.json()
                 raw_content = data['choices'][0]['message']['content']
