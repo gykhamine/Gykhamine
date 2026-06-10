@@ -2657,12 +2657,14 @@ class ControlPanel(Gtk.Box):
     def _run_redis_stop(self, *_):
         cfg = self.get_config()
         redis_ip = cfg.get("redis_ip", "127.0.0.1")
-        redis_port = cfg.get("redis_port", "6379")
+        # Correction : S'assurer que le port est une chaîne de caractères
+        redis_port = str(cfg.get("redis_port", 6379)) 
         self.terminal._log("🛑 === Arrêt de Redis ===")
         def _thread():
             try:
                 GLib.idle_add(self.terminal._log, f"▶ Arrêt de Redis sur {redis_ip}:{redis_port}...")
-                subprocess.run(["redis-cli", "-h", redis_ip, "-p", redis_port, "shutdown", "nosave"], capture_output=True)
+                # Utilisation explicite de strings pour tous les arguments
+                subprocess.run(["redis-cli", "-h", str(redis_ip), "-p", str(redis_port), "shutdown", "nosave"], capture_output=True)
                 subprocess.run(["pkill", "-f", "redis-server"], capture_output=True)
                 GLib.idle_add(self._set_dot, "redis", False)
                 GLib.idle_add(self.show_toast, "✅ Redis arrêté")
@@ -2670,7 +2672,7 @@ class ControlPanel(Gtk.Box):
             except Exception as e:
                 GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
         threading.Thread(target=_thread, daemon=True).start()
-
+        
     def _run_nfs_server_start(self, *_):
         cfg = self.get_config()
         export_dir = cfg.get("nfs_export_dir", "/run/media/gykhamine/GY/gy/media")
