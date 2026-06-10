@@ -39,7 +39,7 @@ def set_margins(widget, val):
 APP_ID   = "org.gykhamine.studio"
 VERSION  = "3.3.1"
 SCRIPT_DIR = Path(__file__).parent.resolve()
-LOGO_PATH  = SCRIPT_DIR / "logo.png"
+LOGO_PATH  = Path("/usr/share/Gykhamine/icon/gykhamine_logo.png")
 
 # 1. Charger le fichier .env s'il existe dans le même dossier que le script
 env_path = SCRIPT_DIR / ".env"
