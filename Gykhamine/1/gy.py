@@ -3,8 +3,8 @@
 ╔══════════════════════════════════════════════════════════╗
 ║           GYKHAMINE STUDIO — v3.3.1 (SSL & Full DB)      ║
 ║     No-code visual editor for Gykhamine capsules         ║
-║     Developed for the GCI project — Brazzaville, Congo   ╚══════════════════════════════════════════════════════════╝
-Dependencies : python3-gi, gtk4, libadwaita-1, zipfile, pandas, openpyxl, requests
+║     Developed for the GCI project — Brazzaville, Congo   ╚
+Dependencies : python3-gi, gtk4, libadwaita-1, zipfile, pandas, openpyxl, requests, python-dotenv
 Launch       : python3 gy.py
 """
 import gi
@@ -15,6 +15,15 @@ import os, sys, re, subprocess, threading, shutil, json, webbrowser, socket, zip
 from pathlib import Path
 from datetime import datetime
 import time
+
+# Importation nécessaire pour le chargement du .env
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    # Fallback si la librairie n'est pas installée
+    def load_dotenv(**kwargs):
+        pass
+
 # ═══════════════════════════════════════════════════════════════════════
 #  GTK4 UTILITIES
 # ═══════════════════════════════════════════════════════════════════════
@@ -31,81 +40,88 @@ APP_ID   = "org.gykhamine.studio"
 VERSION  = "3.3.1"
 SCRIPT_DIR = Path(__file__).parent.resolve()
 LOGO_PATH  = SCRIPT_DIR / "logo.png"
-DB_PATH    = Path.home() / ".config" / "gykhamine_studio.db"
 
+# 1. Charger le fichier .env s'il existe dans le même dossier que le script
+env_path = SCRIPT_DIR / ".env"
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path)
+
+# 2. Définition des valeurs par défaut (utilisées si .env ou DB sont vides)
+# Note: os.getenv récupère les variables du .env chargé précédemment
 DEFAULT_CONFIG = {
-    "llama_server_path": "/usr/local/bin/llama-server",
-    "llama_model_path":  "/models/qwen2.5-coder.gguf",
-    "llama_host":        "127.0.0.1",
-    "llama_port":        "8080",
-    "gunicorn_bind":     "0.0.0.0:8000",
-    "gunicorn_ssl_enabled": False,
-    "gunicorn_ssl_cert_path": str(Path.home() / ".config/gykhamine_studio/ssl/cert.pem"),
-    "gunicorn_ssl_key_path": str(Path.home() / ".config/gykhamine_studio/ssl/key.pem"),
-    "last_project":      "",
-    "last_projects":     [],
-    "theme":             "dark",
-    "open_browser_on_run": False,
-    "auto_find_free_port": True,
-    "default_port_range_start": 8000,
-    "default_port_range_end": 8010,
-    "log_file_path":     str(Path.home() / ".local/share/gykhamine_studio/studio.log"),
-    "db_path":           str(Path.home() / ".config" / "gykhamine_studio.db"),
-    "pg_device":         "",
-    "pg_mount_point":    "/var/lib/pgsql/data",
-    "pg_db_name":        "ma_base",
-    "pg_db_user":        "mon_user",
-    "pg_db_password":    "mot_de_passe",
-    "pg_bind_ip":        "127.0.0.1",
-    "redis_mode":        "local",
-    "redis_ip":          "127.0.0.1",
-    "redis_port":        "6379",
-    "redis_data_dir":    str(Path.home() / "redis_data"),
-    "redis_use_persistence": True,
-    "redis_env_path":    "/run/media/gykhamine/GY/Gykhamine/gy/.env",
-    "redis_update_env":  False,
-    "nfs_server_mode":   "local",
-    "nfs_export_dir":    "/run/media/gykhamine/GY/gy/media",
-    "nfs_lan_network":   "192.168.1.0/24",
-    "nfs_client_server_ip":   "192.168.1.10",
-    "nfs_client_export_dir":  "/srv/nfs",
-    "nfs_client_mount_point": str(Path.home() / "nfs_mount"),
-    "nginx_conf_path":        "/etc/nginx/nginx.conf",
-    "nginx_mode":             "reverse_proxy",
-    "nginx_server_name":      "localhost",
-    "nginx_listen_port":      "443",
-    "nginx_upstream_name":    "gunicorn",
-    "nginx_upstream_servers": "127.0.0.1:8000, 127.0.0.1:8001, 127.0.0.1:8002",
-    "nginx_proxy_pass":       "http://gunicorn",
-    "nginx_force_https":      True,
-    "nginx_ssl_cert":         "/etc/pki/nginx/server.crt",
-    "nginx_ssl_key":          "/etc/pki/nginx/private/server.key",
-    "nginx_static_url":       "/static/",
-    "nginx_static_path":      "/chemin/vers/ton/projet/static/",
-    "nginx_media_url":        "/media/",
-    "nginx_media_path":       "/chemin/vers/ton/projet/media/",
-    "nginx_max_body":         "20M",
-    "nginx_read_timeout":     "60s",
-    "nginx_connect_timeout":  "60s",
-    "nginx_proxy_buffering":  True,
-    "nginx_security_headers": True,
-    "nginx_custom_redirects": "/ancien -> /nouveau\n",
-    "ssh_server_mode":       "local",
-    "ssh_server_port":       "22",
-    "ssh_client_host":       "192.168.1.10",
-    "ssh_client_port":       "22",
-    "ssh_client_user":       "root",
-    "ssh_client_key":        "~/.ssh/id_rsa",
-    "ssh_client_auth_mode":  "key",
-    "venv_name":             "venv",
-    "venv_path":             "",
+    "llama_server_path": os.getenv("LLAMA_SERVER_PATH", "/usr/local/bin/llama-server"),
+    "llama_model_path":  os.getenv("LLAMA_MODEL_PATH", "/models/qwen2.5-coder.gguf"),
+    "llama_host":        os.getenv("LLAMA_HOST", "127.0.0.1"),
+    "llama_port":        int(os.getenv("LLAMA_PORT", "8080")),
+    "gunicorn_bind":     os.getenv("GUNICORN_BIND", "0.0.0.0:8000"),
+    "gunicorn_ssl_enabled": os.getenv("GUNICORN_SSL_ENABLED", "False").lower() == "true",
+    "gunicorn_ssl_cert_path": os.path.expanduser(os.getenv("GUNICORN_SSL_CERT_PATH", "~/.config/gykhamine_studio/ssl/cert.pem")),
+    "gunicorn_ssl_key_path": os.path.expanduser(os.getenv("GUNICORN_SSL_KEY_PATH", "~/.config/gykhamine_studio/ssl/key.pem")),
+    "last_project":      os.getenv("LAST_PROJECT", ""),
+    "last_projects":     [], 
+    "theme":             os.getenv("THEME", "dark"),
+    "open_browser_on_run": os.getenv("OPEN_BROWSER_ON_RUN", "False").lower() == "true",
+    "auto_find_free_port": os.getenv("AUTO_FIND_FREE_PORT", "True").lower() == "true",
+    "default_port_range_start": int(os.getenv("DEFAULT_PORT_RANGE_START", "8000")),
+    "default_port_range_end": int(os.getenv("DEFAULT_PORT_RANGE_END", "8010")),
+    "log_file_path":     os.path.expanduser(os.getenv("LOG_FILE_PATH", "~/.local/share/gykhamine_studio/studio.log")),
+    "db_path":           os.path.expanduser(os.getenv("DB_PATH", "~/.config/gykhamine_studio.db")),
+    "pg_device":         os.getenv("PG_DEVICE", ""),
+    "pg_mount_point":    os.getenv("PG_MOUNT_POINT", "/var/lib/pgsql/data"),
+    "pg_db_name":        os.getenv("PG_DB_NAME", "ma_base"),
+    "pg_db_user":        os.getenv("PG_DB_USER", "mon_user"),
+    "pg_db_password":    os.getenv("PG_DB_PASSWORD", "mot_de_passe"),
+    "pg_bind_ip":        os.getenv("PG_BIND_IP", "127.0.0.1"),
+    "redis_mode":        os.getenv("REDIS_MODE", "local"),
+    "redis_ip":          os.getenv("REDIS_IP", "127.0.0.1"),
+    "redis_port":        int(os.getenv("REDIS_PORT", "6379")),
+    "redis_data_dir":    os.path.expanduser(os.getenv("REDIS_DATA_DIR", "~/redis_data")),
+    "redis_use_persistence": os.getenv("REDIS_USE_PERSISTENCE", "True").lower() == "true",
+    "redis_env_path":    os.getenv("REDIS_ENV_PATH", "/run/media/gykhamine/GY/Gykhamine/gy/.env"),
+    "redis_update_env":  os.getenv("REDIS_UPDATE_ENV", "False").lower() == "true",
+    "nfs_server_mode":   os.getenv("NFS_SERVER_MODE", "local"),
+    "nfs_export_dir":    os.getenv("NFS_EXPORT_DIR", "/run/media/gykhamine/GY/gy/media"),
+    "nfs_lan_network":   os.getenv("NFS_LAN_NETWORK", "192.168.1.0/24"),
+    "nfs_client_server_ip":   os.getenv("NFS_CLIENT_SERVER_IP", "192.168.1.10"),
+    "nfs_client_export_dir":  os.getenv("NFS_CLIENT_EXPORT_DIR", "/srv/nfs"),
+    "nfs_client_mount_point": os.path.expanduser(os.getenv("NFS_CLIENT_MOUNT_POINT", "~/nfs_mount")),
+    "nginx_conf_path":        os.getenv("NGINX_CONF_PATH", "/etc/nginx/nginx.conf"),
+    "nginx_mode":             os.getenv("NGINX_MODE", "reverse_proxy"),
+    "nginx_server_name":      os.getenv("NGINX_SERVER_NAME", "localhost"),
+    "nginx_listen_port":      os.getenv("NGINX_LISTEN_PORT", "443"),
+    "nginx_upstream_name":    os.getenv("NGINX_UPSTREAM_NAME", "gunicorn"),
+    "nginx_upstream_servers": os.getenv("NGINX_UPSTREAM_SERVERS", "127.0.0.1:8000, 127.0.0.1:8001, 127.0.0.1:8002"),
+    "nginx_proxy_pass":       os.getenv("NGINX_PROXY_PASS", "http://gunicorn"),
+    "nginx_force_https":      os.getenv("NGINX_FORCE_HTTPS", "True").lower() == "true",
+    "nginx_ssl_cert":         os.getenv("NGINX_SSL_CERT", "/etc/pki/nginx/server.crt"),
+    "nginx_ssl_key":          os.getenv("NGINX_SSL_KEY", "/etc/pki/nginx/private/server.key"),
+    "nginx_static_url":       os.getenv("NGINX_STATIC_URL", "/static/"),
+    "nginx_static_path":      os.getenv("NGINX_STATIC_PATH", "/chemin/vers/ton/projet/static/"),
+    "nginx_media_url":        os.getenv("NGINX_MEDIA_URL", "/media/"),
+    "nginx_media_path":       os.getenv("NGINX_MEDIA_PATH", "/chemin/vers/ton/projet/media/"),
+    "nginx_max_body":         os.getenv("NGINX_MAX_BODY", "20M"),
+    "nginx_read_timeout":     os.getenv("NGINX_READ_TIMEOUT", "60s"),
+    "nginx_connect_timeout":  os.getenv("NGINX_CONNECT_TIMEOUT", "60s"),
+    "nginx_proxy_buffering":  os.getenv("NGINX_PROXY_BUFFERING", "True").lower() == "true",
+    "nginx_security_headers": os.getenv("NGINX_SECURITY_HEADERS", "True").lower() == "true",
+    "nginx_custom_redirects": os.getenv("NGINX_CUSTOM_REDIRECTS", "/ancien -> /nouveau\n"),
+    "ssh_server_mode":       os.getenv("SSH_SERVER_MODE", "local"),
+    "ssh_server_port":       int(os.getenv("SSH_SERVER_PORT", "22")),
+    "ssh_client_host":       os.getenv("SSH_CLIENT_HOST", "192.168.1.10"),
+    "ssh_client_port":       int(os.getenv("SSH_CLIENT_PORT", "22")),
+    "ssh_client_user":       os.getenv("SSH_CLIENT_USER", "root"),
+    "ssh_client_key":        os.path.expanduser(os.getenv("SSH_CLIENT_KEY", "~/.ssh/id_rsa")),
+    "ssh_client_auth_mode":  os.getenv("SSH_CLIENT_AUTH_MODE", "key"),
+    "venv_name":             os.getenv("VENV_NAME", "venv"),
+    "venv_path":             os.getenv("VENV_PATH", ""),
 }
-
 # ═══════════════════════════════════════════════════════════════════════
 #  SQLITE ENGINE — CONFIG + SMART MEMORY + LOGS
 # ═══════════════════════════════════════════════════════════════════════
 def _get_db_path(cfg_override: str = None) -> Path:
-    return Path(cfg_override) if cfg_override else DB_PATH
+    # Utilise le chemin passé en argument, sinon celui de la config par défaut/env
+    path_str = cfg_override if cfg_override else DEFAULT_CONFIG["db_path"]
+    return Path(path_str)
 
 def _init_db(db_path: Path):
     db_path.parent.mkdir(parents=True, exist_ok=True)
