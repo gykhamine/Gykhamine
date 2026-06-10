@@ -104,7 +104,7 @@ def auto_mount_gy():
     # Pour le trouver, lancez dans un terminal : sudo blkid /dev/sdb*
     # Exemple : GY_DEVICE = "UUID=a1b2c3d4-e5f6-7890-g1h2-i3j4k5l6m7n8"
     GY_DEVICE = "UUID=7a8cbe9a-8869-4382-ab24-fa742fe90eca"  
-    GY_MOUNT_POINT = "/run/media/gykhamine/GY"
+    GY_MOUNT_POINT = "/run/media/gykhamine/GYl"
     
     is_mounted = False
     try:
@@ -2610,29 +2610,23 @@ class ControlPanel(Gtk.Box):
     def _run_redis_start(self, *_):
         cfg = self.get_config()
         redis_ip = cfg.get("redis_ip", "127.0.0.1")
-        redis_port = cfg.get("redis_port", "6379")
+        redis_port = cfg.get("redis_port", 6379)
         data_dir = cfg.get("redis_data_dir", str(Path.home() / "redis_data"))
         use_persistence = cfg.get("redis_use_persistence", True)
+        
+        # Note: Les variables env_path et update_env ne sont plus utilisées pour la modification
+        # mais on les garde si vous voulez juste les afficher dans les logs ou pour d'autres usages futurs
         env_path = cfg.get("redis_env_path", "")
-        update_env = cfg.get("redis_update_env", False)
+        
         self.terminal._log("🔴 === Démarrage de Redis ===")
+        
         def _thread():
             try:
-                if update_env and env_path and Path(env_path).exists():
-                    GLib.idle_add(self.terminal._log, "▶ Mise à jour de REDIS_URL dans le .env...")
-                    with open(env_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    redis_url = f"redis://{redis_ip}:{redis_port}/1"
-                    if "REDIS_URL=" in content:
-                        content = re.sub(r'^REDIS_URL=.*$', f'REDIS_URL={redis_url}', content, flags=re.MULTILINE)
-                    else:
-                        content += f"\nREDIS_URL={redis_url}\n"
-                    with open(env_path, 'w', encoding='utf-8') as f:
-                        f.write(content)
-                    GLib.idle_add(self.terminal._log, f"✅ REDIS_URL synchronisé : {redis_url}")
-                elif update_env:
-                    GLib.idle_add(self.terminal._log, f"⚠ Fichier .env introuvable à : {env_path}")
-                
+                # --- DÉBUT DE LA SUPPRESSION ---
+                # Tout le bloc 'if update_env and env_path...' a été retiré ici.
+                # Redis démarrera simplement avec les paramètres fournis.
+                # --- FIN DE LA SUPPRESSION ---
+
                 if use_persistence:
                     os.makedirs(data_dir, exist_ok=True)
                     cmd = f"redis-server --bind {redis_ip} --port {redis_port} --dir {data_dir} --appendonly yes --daemonize yes"
@@ -2641,6 +2635,7 @@ class ControlPanel(Gtk.Box):
                 
                 GLib.idle_add(self.terminal._log, f"▶ Exécution : {cmd}")
                 status = os.system(cmd)
+                
                 if status == 0:
                     GLib.idle_add(self._set_dot, "redis", True)
                     GLib.idle_add(self.show_toast, "✅ Redis démarré")
@@ -2652,6 +2647,7 @@ class ControlPanel(Gtk.Box):
             except Exception as e:
                 GLib.idle_add(self._set_dot, "redis", False)
                 GLib.idle_add(self.terminal._log, f"❌ Exception: {e}")
+        
         threading.Thread(target=_thread, daemon=True).start()
 
     def _run_redis_stop(self, *_):
