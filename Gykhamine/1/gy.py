@@ -93,11 +93,17 @@ install_desktop_files_startup()
 # ═══════════════════════════════════════════════════════════════════════
 #  MONTAGE AUTOMATIQUE DE LA PARTITION GY (SUDO)
 # ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
+#  MONTAGE AUTOMATIQUE DE LA PARTITION GY VIA SON UUID (SUDO)
+# ═══════════════════════════════════════════════════════════════════════
 def auto_mount_gy():
     """
-    Monte la partition Gy si elle n'est pas déjà montée.
+    Monte la partition Gy via son UUID si elle n'est pas déjà montée.
     """
-    GY_DEVICE = "/dev/sda2"
+    # ⚠️ REMPLACEZ "VOTRE_UUID_ICI" par l'UUID réel de votre partition /dev/sdb
+    # Pour le trouver, lancez dans un terminal : sudo blkid /dev/sdb*
+    # Exemple : GY_DEVICE = "UUID=a1b2c3d4-e5f6-7890-g1h2-i3j4k5l6m7n8"
+    GY_DEVICE = "UUID=7a8cbe9a-8869-4382-ab24-fa742fe90eca"  
     GY_MOUNT_POINT = "/run/media/gykhamine/GY"
     
     is_mounted = False
@@ -113,6 +119,7 @@ def auto_mount_gy():
         print(f"📂 Tentative de montage de {GY_DEVICE} sur {GY_MOUNT_POINT}...")
         try:
             subprocess.run(["sudo", "mkdir", "-p", GY_MOUNT_POINT], check=True, capture_output=True)
+            # La commande 'mount' de Linux accepte nativement le format "UUID=..."
             subprocess.run(["sudo", "mount", GY_DEVICE, GY_MOUNT_POINT], check=True, capture_output=True)
             print("✅ Partition montée avec succès.")
             is_mounted = True
@@ -122,9 +129,9 @@ def auto_mount_gy():
         except Exception as e:
             print(f"❌ Erreur inattendue lors du montage: {e}")
             return False
-
     return is_mounted
-
+    
+    
 # Exécution immédiate au lancement du script
 if not auto_mount_gy():
     print("⚠️ Le montage automatique a échoué. L'application va continuer mais certains chemins GY peuvent être inaccessibles.")
@@ -148,7 +155,7 @@ DEFAULT_CONFIG = {
     "default_port_range_end": 8010,
     "log_file_path":     os.path.expanduser("/run/media/gykhamine/GY/logs/studio.log"),
     "db_path":           os.path.expanduser("/run/media/gykhamine/GY/db/gykhamine_studio.db"),
-    "pg_device":         "/dev/sdb3",
+    "pg_device":         "UUID=16815455-ad07-4bc6-a9f9-ee9f0b0a6246",  # Remplacez par le vrai UUID de sdb3
     "pg_mount_point":    "/var/lib/pgsql/data",
     "pg_db_name":        "ma_base",
     "pg_db_user":        "mon_user",
