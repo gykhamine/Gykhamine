@@ -361,47 +361,81 @@ SEPARATOR_RE = re.compile(r'^#{4,}.*$|^/{4,}.*$|^-{4,}.*$', re.MULTILINE)
 
 def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
     lines = code.splitlines(keepends=True)
-    blocks, i, current_lines, current_start = [], 0, [], 0
+    blocks = []
 
     def _get_indent(line):
         return len(line) - len(line.lstrip())
 
-    def _extract_children(parent_start_idx, parent_indent_level):
-        """Extrait récursivement les enfants (ex: méthodes d'une classe)"""
+    def _extract_python_children(start_idx, parent_indent):
+        """Extrait récursivement les enfants (fonctions, conditions, boucles, variables)"""
         children = []
-        j = parent_start_idx + 1
-        child_lines = []
-        child_start = j
-        child_name = ""
-        child_type = ""
-
-        while j < len(lines):
-            line = lines[j]
+        i = start_idx + 1
+        while i < len(lines):
+            line = lines[i]
             stripped = line.strip()
             if not stripped:
-                if child_lines: child_lines.append(line)
-                j += 1
+                i += 1
                 continue
-
-            current_indent = _get_indent(line)
-            if current_indent <= parent_indent_level and stripped:
-                break
             
-            is_method = re.match(r'^(async\s+)?def\s+(\w+)\s*\(', stripped)
-            if is_method:
-                if child_lines and child_name:
-                    children.append({"type": child_type, "name": child_name, "code": "".join(child_lines), "start": child_start, "end": child_start + len(child_lines) - 1, "children": []})
-                child_start = j
-                child_lines = [line]
-                child_name = is_method.group(2)
-                child_type = "function"
-                j += 1
-            else:
-                child_lines.append(line)
-                j += 1
+            current_indent = _get_indent(line)
+            
+            # Si on remonte au niveau du parent ou au-dessus, le bloc est fini
+            if current_indent <= parent_indent:
+                break
 
-        if child_lines and child_name:
-            children.append({"type": child_type, "name": child_name, "code": "".join(child_lines), "start": child_start, "end": child_start + len(child_lines) - 1, "children": []})
+            # Détection des structures
+            is_func = re.match(r'^(async\s+)?def\s+(\w+)', stripped)
+            is_class = re.match(r'^class\s+(\w+)', stripped)
+            is_if = re.match(r'^if\s+.+:', stripped)
+            is_elif = re.match(r'^elif\s+.+:', stripped)
+            is_else = re.match(r'^else\s*:', stripped)
+            is_for = re.match(r'^for\s+.+:', stripped)
+            is_while = re.match(r'^while\s+.+:', stripped)
+            is_try = re.match(r'^try\s*:', stripped)
+            is_except = re.match(r'^except.*:', stripped)
+            is_with = re.match(r'^with\s+.+:', stripped)
+            is_var = re.match(r'^[a-zA-Z_]\w*\s*=', stripped) and not re.match(r'^(if|for|while|with|def|class)\b', stripped)
+
+            block_type, block_name = "other", stripped[:40]
+            if is_func: block_type, block_name = "function", is_func.group(2)
+            elif is_class: block_type, block_name = "class", is_class.group(1)
+            elif is_if: block_type, block_name = "if", stripped[:40]
+            elif is_elif: block_type, block_name = "elif", stripped[:40]
+            elif is_else: block_type, block_name = "else", "else"
+            elif is_for: block_type, block_name = "for", stripped[:40]
+            elif is_while: block_type, block_name = "while", stripped[:40]
+            elif is_try: block_type, block_name = "try", "try"
+            elif is_except: block_type, block_name = "except", stripped[:40]
+            elif is_with: block_type, block_name = "with", stripped[:40]
+            elif is_var: block_type, block_name = "variable", stripped.split('=')[0].strip()[:40]
+
+            # Trouver la fin du bloc (prochaine ligne non vide avec indentation <= current_indent)
+            block_end = i
+            for k in range(i + 1, len(lines)):
+                next_line = lines[k]
+                next_stripped = next_line.strip()
+                if not next_stripped:
+                    continue
+                if _get_indent(next_line) <= current_indent:
+                    block_end = k - 1
+                    break
+            else:
+                block_end = len(lines) - 1
+
+            raw_code = "".join(lines[i:block_end + 1])
+            
+            # Appel récursif pour les enfants de ce bloc
+            sub_children = _extract_python_children(i, current_indent)
+
+            children.append({
+                "type": block_type,
+                "name": block_name,
+                "code": raw_code,
+                "start": i,
+                "end": block_end,
+                "children": sub_children
+            })
+            i = block_end + 1
         return children
 
     def flush(label_override=None):
@@ -418,12 +452,13 @@ def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
             else: btype, bname = "other", stripped[:40] if stripped else "bloc"
             
             children = []
-            if btype == "class":
-                children = _extract_children(current_start, 0)
-
+            if btype in ("class", "function"):
+                children = _extract_python_children(current_start, 0)
+                
             blocks.append({"type": btype, "name": bname, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1, "children": children})
         current_lines, current_start = [], i
 
+    current_lines, current_start, i = [], 0, 0
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
@@ -434,14 +469,15 @@ def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
             current_start = i + 1
             i += 1
             continue
-
+            
         is_root_block_start = not line.startswith((" ", "\t")) and (
             stripped.startswith("@") or
             re.match(r'^(async\s+)?def\s+\w+', stripped) or
             re.match(r'^class\s+\w+', stripped) or
-            stripped.startswith("#")
+            stripped.startswith("#") or
+            re.match(r'^(if|for|while|try|with)\b', stripped) # Ajout des blocs racine de contrôle
         )
-
+        
         if is_root_block_start:
             flush()
             current_start = i
@@ -453,18 +489,16 @@ def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
                 l = lines[i]
                 if l.strip() == "" or l.startswith((" ", "\t")):
                     current_lines.append(l); i += 1
-                elif not l.startswith((" ", "\t")) and (l.strip().startswith("@") or re.match(r'^(async\s+)?def\s+\w+', l.strip()) or re.match(r'^class\s+\w+', l.strip()) or l.strip().startswith("#")):
+                elif not l.startswith((" ", "\t")) and (l.strip().startswith("@") or re.match(r'^(async\s+)?def\s+\w+', l.strip()) or re.match(r'^class\s+\w+', l.strip()) or l.strip().startswith("#") or re.match(r'^(if|for|while|try|with)\b', l.strip())):
                     break
                 else:
                     current_lines.append(l); i += 1
             flush()
             continue
-        
+            
         current_lines.append(line); i += 1
-    
     flush()
     return blocks
-
 
 def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
     """
@@ -698,82 +732,232 @@ def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
     final_blocks.sort(key=lambda b: b['start'])
     
     return final_blocks if final_blocks else blocks
+    
 def _parse_css_blocks(code: str, file_path: str) -> list[dict]:
     lines = code.splitlines(keepends=True)
-    blocks, i, current_lines, current_start = [], 0, [], 0
-
-    def _extract_css_children(parent_start, parent_end):
+    
+    def _extract_css_children(start_idx, end_idx):
+        """Extrait récursivement les sélecteurs, variables, propriétés et règles @"""
         children = []
-        j = parent_start
-        while j <= parent_end:
-            line = lines[j]; stripped = line.strip()
-            if stripped and '{' in stripped and not stripped.startswith('/*'):
-                start_child = j
-                name = stripped.split('{')[0].strip()[:40]
-                # Trouver la fin du bloc enfant
-                depth = 0
-                end_child = j
-                for k in range(j, parent_end + 1):
-                    depth += lines[k].count('{') - lines[k].count('}')
-                    if depth == 0: end_child = k; break
-                raw = "".join(lines[start_child:end_child+1])
-                children.append({"type": "style_rule", "name": name, "code": raw, "start": start_child, "end": end_child, "children": []})
-                j = end_child + 1
-            else:
-                j += 1
+        i = start_idx
+        while i <= end_idx:
+            line = lines[i]
+            stripped = line.strip()
+            
+            # Ignorer les lignes vides et les commentaires simples
+            if not stripped or stripped.startswith('/*') or stripped.startswith('*'):
+                i += 1
+                continue
+
+            # 1. Détection des règles @ (@media, @keyframes, @font-face, @import, etc.)
+            is_at_rule = re.match(r'^@([\w-]+)', stripped)
+            if is_at_rule:
+                rule_type = is_at_rule.group(1)
+                block_name = stripped[:60]
+                
+                # Trouver le début de l'accolade (parfois sur la ligne suivante)
+                brace_start = i
+                for k in range(i, min(i + 10, len(lines))):
+                    if '{' in lines[k]:
+                        brace_start = k
+                        break
+                
+                brace_end = _find_matching_brace(lines, brace_start)
+                raw_code = "".join(lines[i:brace_end + 1])
+                
+                # APPEL RÉCURSIF : Analyser l'intérieur du @media ou @keyframes
+                sub_children = _extract_css_children(brace_start + 1, brace_end - 1)
+                
+                children.append({
+                    "type": f"css_at_{rule_type}",
+                    "name": block_name,
+                    "code": raw_code,
+                    "start": i,
+                    "end": brace_end,
+                    "children": sub_children
+                })
+                i = brace_end + 1
+                continue
+
+            # 2. Détection des Sélecteurs standards (.class, #id, element) contenant { }
+            if '{' in stripped and not stripped.startswith('--'):
+                # Nettoyer le nom du sélecteur (enlever le { et les espaces)
+                block_name = stripped.split('{')[0].strip()[:50]
+                
+                brace_start = i
+                for k in range(i, min(i + 5, len(lines))):
+                    if '{' in lines[k]:
+                        brace_start = k
+                        break
+                
+                brace_end = _find_matching_brace(lines, brace_start)
+                raw_code = "".join(lines[i:brace_end + 1])
+                
+                # APPEL RÉCURSIF : Analyser les propriétés à l'intérieur du sélecteur
+                sub_children = _extract_css_children(brace_start + 1, brace_end - 1)
+                
+                children.append({
+                    "type": "css_selector",
+                    "name": block_name,
+                    "code": raw_code,
+                    "start": i,
+                    "end": brace_end,
+                    "children": sub_children
+                })
+                i = brace_end + 1
+                continue
+
+            # 3. Détection des Variables CSS (--nom-variable: valeur;)
+            is_variable = re.match(r'^--[\w-]+\s*:', stripped)
+            # 4. Détection des Propriétés simples (se terminant par ;)
+            is_property = stripped.endswith(';') and not is_variable
+
+            if is_variable or is_property:
+                block_type = "css_variable" if is_variable else "css_property"
+                # Extraire le nom de la variable ou de la propriété (avant les deux-points)
+                block_name = stripped.split(':')[0].strip()[:40] if ':' in stripped else stripped[:40]
+                
+                # Une propriété peut s'étaler sur plusieurs lignes, on cherche le ;
+                prop_end = i
+                for k in range(i, min(i + 15, len(lines))):
+                    if ';' in lines[k]:
+                        prop_end = k
+                        break
+                
+                raw_code = "".join(lines[i:prop_end + 1])
+                
+                children.append({
+                    "type": block_type,
+                    "name": block_name,
+                    "code": raw_code,
+                    "start": i,
+                    "end": prop_end,
+                    "children": [] # Les propriétés sont des feuilles (pas d'enfants)
+                })
+                i = prop_end + 1
+                continue
+
+            # Fallback : si c'est une ligne bizarre, on avance
+            i += 1
+            
         return children
 
-    def flush(label="CSS Rule"):
+    # --- Parsing du niveau racine ---
+    # On traite tout le fichier comme un conteneur dont on extrait les enfants de premier niveau
+    root_children = _extract_css_children(0, len(lines) - 1)
+    
+    if root_children:
+        return [{
+            "type": "css_file",
+            "name": Path(file_path).name if file_path else "Stylesheet.css",
+            "code": code,
+            "start": 0,
+            "end": len(lines) - 1,
+            "children": root_children
+        }]
+    
+    # Fallback si le fichier est vide ou incompréhensible
+    return [{"type": "css_file", "name": "Stylesheet", "code": code, "start": 0, "end": len(lines)-1, "children": []}]
+def _parse_js_blocks(code: str, file_path: str) -> list[dict]:
+    lines = code.splitlines(keepends=True)
+    blocks = []
+
+    def _extract_js_children(start_idx, end_idx):
+        """Extrait récursivement les blocs JS (contrôle, variables, fonctions internes)"""
+        children = []
+        i = start_idx
+        while i <= end_idx:
+            line = lines[i]
+            stripped = line.strip()
+            
+            if not stripped or stripped.startswith('//') or stripped.startswith('/*'):
+                i += 1
+                continue
+
+            # Détection des structures
+            is_control = re.match(r'^(if|for|while|switch|try|catch|finally|else|class)\b', stripped)
+            is_func = re.match(r'^(async\s+)?function\s+\w+|^\w+\s*\(.*\)\s*\{|^\w+\s*=\s*(async\s+)?function', stripped)
+            is_var = re.match(r'^(const|let|var)\s+\w+', stripped)
+
+            if is_control or is_func or is_var:
+                if is_control:
+                    block_type = f"js_{is_control.group(1)}"
+                    block_name = stripped[:50]
+                elif is_func:
+                    block_type = "js_function"
+                    match_name = re.search(r'(?:function\s+)?(\w+)\s*\(', stripped)
+                    block_name = match_name.group(1) if match_name else "Anonymous"
+                else:
+                    block_type = "js_variable"
+                    block_name = stripped.split('=')[0].strip().split()[-1][:40]
+
+                # Trouver le début de l'accolade
+                brace_start = i
+                for k in range(i, min(i + 5, len(lines))):
+                    if '{' in lines[k]:
+                        brace_start = k
+                        break
+                
+                brace_end = _find_matching_brace(lines, brace_start)
+                raw_code = "".join(lines[i:brace_end + 1])
+                
+                # APPEL RÉCURSIF pour l'intérieur du bloc
+                sub_children = _extract_js_children(brace_start + 1, brace_end - 1)
+
+                children.append({
+                    "type": block_type,
+                    "name": block_name,
+                    "code": raw_code,
+                    "start": i,
+                    "end": brace_end,
+                    "children": sub_children
+                })
+                i = brace_end + 1
+            else:
+                i += 1
+        return children
+
+    # --- Parsing du niveau racine ---
+    i, current_lines, current_start = 0, [], 0
+    def flush(label="JS Block"):
         nonlocal current_lines, current_start
         if not current_lines: return
         raw = "".join(current_lines)
         if raw.strip():
-            name = label
-            if '{' in raw:
-                name = re.sub(r'\s+', ' ', raw.split('{')[0].strip()[:40]) or "CSS Rule"
-            # Si c'est un bloc avec accolades, on extrait les enfants
-            children = []
-            if '{' in raw and '}' in raw:
-                children = _extract_css_children(current_start, current_start + len(current_lines) - 1)
-            
-            blocks.append({"type": "style_rule", "name": name, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1, "children": children})
+            parts = raw.strip().split()
+            name = f"{parts[0]} {parts[1].split('(')[0].split('=')[0]}"[:40] if len(parts) >= 2 else parts[0]
+            # Appel récursif sur le bloc racine entier
+            children = _extract_js_children(current_start, current_start + len(current_lines) - 1)
+            blocks.append({
+                "type": "script_block", 
+                "name": name, 
+                "code": raw, 
+                "start": current_start, 
+                "end": current_start + len(current_lines) - 1, 
+                "children": children
+            })
         current_lines, current_start = [], i
 
     while i < len(lines):
-        line = lines[i]; stripped = line.strip()
-        if stripped.startswith('@') or (stripped and not stripped.startswith('/') and '{' in stripped and not stripped.startswith('}')):
-            flush(re.sub(r'\s+', ' ', stripped.split('{')[0].strip()[:40]) or "CSS Rule"); current_start = i; current_lines.append(line)
-        elif stripped.startswith('/*'): flush("Comment"); current_start = i; current_lines.append(line)
-        else: current_lines.append(line); i += 1
-    flush("End of file"); return blocks
-
-def _parse_js_blocks(code: str, file_path: str) -> list[dict]:
-    lines = code.splitlines(keepends=True)
-    blocks, i, current_lines, current_start = [], 0, [], 0
-    
-    def _extract_js_children(parent_start, parent_end, parent_indent):
-        children = []
-        j = parent_start + 1
-        while j <= parent_end:
-            line = lines[j]; stripped = line.strip()
-            indent = len(line) - len(line.lstrip())
-            if indent > parent_indent and re.match(r'^(async\s+)?function\s+\w+|^\w+\s*\(.*\)\s*\{|^\w+\s*=\s*function|^\w+\s*:\s*function', stripped):
-                start_child = j
-                name = re.search(r'(?:function\s+)?(\w+)\s*\(', stripped)
-                name = name.group(1) if name else "Anonymous"
-                # Trouver la fin simple (basique)
-                end_child = j
-                depth = 0
-                for k in range(j, parent_end + 1):
-                    depth += lines[k].count('{') - lines[k].count('}')
-                    if depth == 0: end_child = k; break
-                raw = "".join(lines[start_child:end_child+1])
-                children.append({"type": "function", "name": name, "code": raw, "start": start_child, "end": end_child, "children": []})
-                j = end_child + 1
-            else:
-                j += 1
-        return children
-
+        line = lines[i]
+        stripped = line.strip()
+        
+        # Déclencheurs de blocs racine JS
+        is_root = (
+            re.match(r'^(class|function|async\s+function|const|let|var|export|import)\s+', stripped) or 
+            re.match(r'^//\s*#{4,}', stripped)
+        )
+        
+        if is_root:
+            flush()
+            current_start = i
+            current_lines.append(line)
+        else:
+            current_lines.append(line)
+        i += 1
+        
+    flush("End of file")
+    return blocks
     def flush(label="JS Block"):
         nonlocal current_lines, current_start
         if not current_lines: return
@@ -796,46 +980,110 @@ def _parse_js_blocks(code: str, file_path: str) -> list[dict]:
 
 def _parse_c_blocks(code: str, file_path: str) -> list[dict]:
     lines = code.splitlines(keepends=True)
-    blocks, i, current_lines, current_start = [], 0, [], 0
-    
-    def _extract_c_children(parent_start, parent_end):
+    blocks = []
+
+    def _extract_c_children(start_idx, end_idx):
+        """Extrait récursivement les blocs C/C++ (contrôle, variables, fonctions internes)"""
         children = []
-        j = parent_start + 1
-        while j <= parent_end:
-            line = lines[j]; stripped = line.strip()
-            if re.match(r'^(void|int|char|float|double|bool|auto|unsigned|signed|long|short)\s+\w+\s*\(', stripped):
-                start_child = j
-                name = re.search(r'\w+\s*\(', stripped).group(0).replace('(', '').strip()
-                end_child = j
-                depth = 0
-                for k in range(j, parent_end + 1):
-                    depth += lines[k].count('{') - lines[k].count('}')
-                    if depth == 0: end_child = k; break
-                raw = "".join(lines[start_child:end_child+1])
-                children.append({"type": "function", "name": name, "code": raw, "start": start_child, "end": end_child, "children": []})
-                j = end_child + 1
+        i = start_idx
+        while i <= end_idx:
+            line = lines[i]
+            stripped = line.strip()
+            
+            # Ignorer les lignes vides ou commentaires simples
+            if not stripped or stripped.startswith('//') or stripped.startswith('/*'):
+                i += 1
+                continue
+
+            # Détection des structures de contrôle et classes/structs
+            is_control = re.match(r'^(if|for|while|switch|try|catch|finally|else|class|struct|enum|namespace)\b', stripped)
+            # Détection des fonctions (type nom(...))
+            is_func = re.match(r'^(void|int|char|float|double|bool|auto|unsigned|signed|long|short|size_t|struct|enum|class)\s+\w+\s*\(', stripped)
+            # Détection des variables (type nom;)
+            is_var = re.match(r'^(void|int|char|float|double|bool|auto|unsigned|signed|long|short|size_t|struct|enum|class)\s+\w+', stripped) and not is_func
+
+            if is_control or is_func or is_var:
+                if is_control:
+                    block_type = f"c_{is_control.group(1)}"
+                    block_name = stripped[:50]
+                elif is_func:
+                    block_type = "c_function"
+                    block_name = re.search(r'\w+\s*\(', stripped).group(0).replace('(', '').strip()
+                else:
+                    block_type = "c_variable"
+                    block_name = stripped.split('=')[0].strip().split()[-1][:40]
+
+                # Trouver où commence l'accolade (parfois sur la ligne suivante pour les fonctions)
+                brace_start = i
+                for k in range(i, min(i + 5, len(lines))):
+                    if '{' in lines[k]:
+                        brace_start = k
+                        break
+                
+                # Trouver la fin du bloc
+                brace_end = _find_matching_brace(lines, brace_start)
+                raw_code = "".join(lines[i:brace_end + 1])
+                
+                # APPEL RÉCURSIF pour l'intérieur du bloc
+                sub_children = _extract_c_children(brace_start + 1, brace_end - 1)
+
+                children.append({
+                    "type": block_type,
+                    "name": block_name,
+                    "code": raw_code,
+                    "start": i,
+                    "end": brace_end,
+                    "children": sub_children
+                })
+                i = brace_end + 1
             else:
-                j += 1
+                i += 1
         return children
 
+    # --- Parsing du niveau racine ---
+    i, current_lines, current_start = 0, [], 0
     def flush(label="C/C++ Block"):
         nonlocal current_lines, current_start
         if not current_lines: return
         raw = "".join(current_lines)
         if raw.strip():
-            parts = raw.strip().split(); name = " ".join(parts[:2])[:40]
-            children = []
-            if 'class ' in raw or 'struct ' in raw or '{' in raw:
-                children = _extract_c_children(current_start, current_start + len(current_lines) - 1)
-            blocks.append({"type": "c_block", "name": name, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1, "children": children})
+            parts = raw.strip().split()
+            name = " ".join(parts[:2])[:40] if len(parts) >= 2 else parts[0]
+            # Appel récursif sur le bloc racine entier
+            children = _extract_c_children(current_start, current_start + len(current_lines) - 1)
+            blocks.append({
+                "type": "c_block", 
+                "name": name, 
+                "code": raw, 
+                "start": current_start, 
+                "end": current_start + len(current_lines) - 1, 
+                "children": children
+            })
         current_lines, current_start = [], i
 
     while i < len(lines):
-        line = lines[i]; stripped = line.strip()
-        if re.match(r'^(class|struct|enum|namespace)\s+\w+', stripped) or re.match(r'^(void|int|char|float|double|bool|auto|unsigned|signed|long|short)\s+\w+\s*\(', stripped) or re.match(r'^#\s*(include|define|pragma|ifdef|ifndef|endif)', stripped) or re.match(r'^//\s*#{4,}', stripped):
-            flush(" ".join(stripped.split()[:2])[:40]); current_start = i; current_lines.append(line)
-        else: current_lines.append(line); i += 1
-    flush("End of file"); return blocks
+        line = lines[i]
+        stripped = line.strip()
+        
+        # Déclencheurs de blocs racine
+        is_root = (
+            re.match(r'^(class|struct|enum|namespace)\s+\w+', stripped) or
+            re.match(r'^(void|int|char|float|double|bool|auto|unsigned|signed|long|short|size_t)\s+\w+\s*\(', stripped) or
+            re.match(r'^#\s*(include|define|pragma|ifdef|ifndef|endif)', stripped) or
+            re.match(r'^//\s*#{4,}', stripped)
+        )
+        
+        if is_root:
+            flush()
+            current_start = i
+            current_lines.append(line)
+        else:
+            current_lines.append(line)
+        i += 1
+        
+    flush("End of file")
+    return blocks
+    
 def parse_blocks(code: str, file_path: str = "") -> list[dict]:
     ext = Path(file_path).suffix.lower()
     if ext in ('.html', '.jinja', '.jinja2', '.htm'): return _parse_template_blocks(code, file_path)
