@@ -2111,6 +2111,11 @@ class BlockCard(Gtk.Box):
             btn_ai.connect("clicked", self._open_ai_dialog)
             header.append(btn_ai)
             
+        # --- NOUVEAU: Boutons de déplacement de bloc ---
+        btn_up = Gtk.Button(label="⬆"); btn_up.set_tooltip_text("Monter le bloc (et ses enfants)"); btn_up.add_css_class("block-action-btn"); btn_up.connect("clicked", lambda *_: self._move_block(-1))
+        btn_down = Gtk.Button(label="⬇"); btn_down.set_tooltip_text("Descendre le bloc (et ses enfants)"); btn_down.add_css_class("block-action-btn"); btn_down.connect("clicked", lambda *_: self._move_block(1))
+        header.append(btn_up); header.append(btn_down)
+
         for label, tooltip, cb, css in [("👁", "View / Edit", self._view_code, "btn-view"), ("✏", "Inline Edit", self._toggle_edit, "btn-edit"), ("⧉", "Copy", self._do_copy, "btn-copy"), ("✕", "Delete", self._do_delete, "btn-delete")]:
             btn = Gtk.Button(label=label); btn.set_tooltip_text(tooltip); btn.add_css_class("block-action-btn"); btn.add_css_class(css); btn.connect("clicked", cb); header.append(btn)
         self.append(header)
@@ -2188,6 +2193,35 @@ class BlockCard(Gtk.Box):
         dialog = AIModificationDialog(self.parent_window, self.block, self.ai_engine, on_confirm, project_root=project_root)
         dialog.present()
 
+    def _move_block(self, direction):
+        """Déplace le bloc (et toute sa hiérarchie d'enfants) vers le haut (-1) ou le bas (1)"""
+        def find_and_swap(blocks_list, target_block, dir):
+            for i, b in enumerate(blocks_list):
+                if b is target_block:
+                    if dir == -1 and i > 0:
+                        blocks_list[i], blocks_list[i-1] = blocks_list[i-1], blocks_list[i]
+                        return True
+                    elif dir == 1 and i < len(blocks_list) - 1:
+                        blocks_list[i], blocks_list[i+1] = blocks_list[i+1], blocks_list[i]
+                        return True
+                # Recherche récursive dans les enfants
+                if "children" in b and b["children"]:
+                    if find_and_swap(b["children"], target_block, dir):
+                        return True
+            return False
+
+        # self.parent_window est maintenant l'instance directe de BlockEditorView
+        editor_view = self.parent_window
+        
+        if hasattr(editor_view, 'blocks') and find_and_swap(editor_view.blocks, self.block, direction):
+            editor_view._push_state()
+            editor_view._render_blocks()
+            if hasattr(editor_view, 'toast_cb'):
+                editor_view.toast_cb("✅ Bloc déplacé")
+        else:
+            if hasattr(editor_view, 'toast_cb'):
+                editor_view.toast_cb("⚠️ Limite de déplacement atteinte")
+
 class FilePanel(Gtk.Box):
     def __init__(self, on_file_select, on_project_select, on_file_created, on_file_imported):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -2198,6 +2232,8 @@ class FilePanel(Gtk.Box):
         self.project_root = None
         self.tree_store = Gtk.TreeStore(str, str, bool)
         self.show_hidden = False
+        self.clipboard_action = None
+        self.clipboard_path = None
         self.watcher = None
         
         lbl = Gtk.Label(label="📁 Projet"); lbl.add_css_class("panel-title"); lbl.set_xalign(0); lbl.set_margin_start(12); lbl.set_margin_top(10); lbl.set_margin_bottom(6)
@@ -2435,9 +2471,58 @@ class FilePanel(Gtk.Box):
         name = model.get_value(tree_iter, 0); full_path = model.get_value(tree_iter, 1); is_folder = model.get_value(tree_iter, 2)
         self._show_context_menu(int(x), int(y), full_path, name, is_folder)
 
+    def _set_clipboard(self, action, path, popover):
+        self.clipboard_action = action
+        self.clipboard_path = path
+        popover.popdown()
+        self._show_toast(f"✅ {path} mis dans le presse-papiers ({action})")
+
+    def _paste_clipboard(self, target_dir, popover):
+        popover.popdown()
+        if not self.clipboard_action or not self.clipboard_path:
+            return
+        src = Path(self.clipboard_path)
+        dst = Path(target_dir) / src.name
+        
+        # Sécurité : Éviter de coller un dossier dans lui-même
+        if src.resolve() == dst.resolve() or str(src.resolve()) in str(dst.resolve()):
+            self._show_error("❌ Impossible de coller un élément dans lui-même ou un de ses sous-dações.")
+            return
+
+        try:
+            if self.clipboard_action == "copy":
+                if src.is_dir():
+                    shutil.copytree(src, dst)
+                else:
+                    shutil.copy2(src, dst)
+                self._show_toast(f"✅ Copié vers {dst.name}")
+            elif self.clipboard_action == "cut":
+                shutil.move(str(src), str(dst))
+                self.clipboard_action = None
+                self.clipboard_path = None
+                self._show_toast(f"✅ Déplacé vers {dst.name}")
+            
+            self.load_project(self.project_root, load_config())
+        except Exception as e:
+            self._log_message(f"❌ Erreur collage: {e}")
+            self._show_error(f"Erreur: {e}")
+
     def _show_context_menu(self, x, y, full_path, name, is_folder):
         popover = Gtk.Popover(); popover.set_parent(self.tree_view); popover.set_has_arrow(False)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4); set_margins(box, 6)
+        # --- NOUVEAU: Gestion Copier/Couper/Coller ---
+        if not is_folder:
+            btn_copy = Gtk.Button(label="📋 Copier"); btn_copy.set_halign(Gtk.Align.FILL); btn_copy.add_css_class("flat"); btn_copy.connect("clicked", lambda *_: self._set_clipboard("copy", full_path, popover))
+            btn_cut = Gtk.Button(label="✂️ Couper"); btn_cut.set_halign(Gtk.Align.FILL); btn_cut.add_css_class("flat"); btn_cut.connect("clicked", lambda *_: self._set_clipboard("cut", full_path, popover))
+            box.append(btn_copy); box.append(btn_cut)
+        else:
+            if self.clipboard_action and self.clipboard_path:
+                btn_paste = Gtk.Button(label=f"📥 Coller ici ({self.clipboard_action})"); btn_paste.set_halign(Gtk.Align.FILL); btn_paste.add_css_class("flat"); btn_paste.add_css_class("suggested-action"); btn_paste.connect("clicked", lambda *_: self._paste_clipboard(full_path, popover))
+                box.append(btn_paste)
+            btn_copy_dir = Gtk.Button(label="📋 Copier le dossier"); btn_copy_dir.set_halign(Gtk.Align.FILL); btn_copy_dir.add_css_class("flat"); btn_copy_dir.connect("clicked", lambda *_: self._set_clipboard("copy", full_path, popover))
+            btn_cut_dir = Gtk.Button(label="✂️ Couper le dossier"); btn_cut_dir.set_halign(Gtk.Align.FILL); btn_cut_dir.add_css_class("flat"); btn_cut_dir.connect("clicked", lambda *_: self._set_clipboard("cut", full_path, popover))
+            box.append(btn_copy_dir); box.append(btn_cut_dir)
+
         btn_rename = Gtk.Button(label="✏️ Renommer"); btn_rename.set_halign(Gtk.Align.FILL); btn_rename.add_css_class("flat"); btn_rename.connect("clicked", lambda *_: self._rename_item(full_path, name, is_folder, popover))
         btn_delete = Gtk.Button(label="🗑 Supprimer"); btn_delete.set_halign(Gtk.Align.FILL); btn_delete.add_css_class("flat"); btn_delete.add_css_class("destructive-action"); btn_delete.connect("clicked", lambda *_: self._delete_item(full_path, name, is_folder, popover))
         box.append(btn_rename); box.append(btn_delete); popover.set_child(box)
@@ -4481,7 +4566,7 @@ class BlockEditorView(Gtk.Box):
                 self._on_block_copy, 
                 self.file_ext, 
                 ai_engine=self.ai_engine, 
-                parent_window=self.get_root()
+                parent_window=self
             )
             
             # Indentation visuelle pour les enfants
@@ -4506,7 +4591,7 @@ class BlockEditorView(Gtk.Box):
                 self._on_block_copy, 
                 self.file_ext, 
                 ai_engine=self.ai_engine, 
-                parent_window=self.get_root()
+                parent_window=self
             )
             
             # Indentation visuelle pour les enfants
@@ -4531,7 +4616,7 @@ class BlockEditorView(Gtk.Box):
                 self._on_block_copy, 
                 self.file_ext, 
                 ai_engine=self.ai_engine, 
-                parent_window=self.get_root()
+                parent_window=self
             )
             
             # Indentation visuelle pour les enfants
@@ -4556,7 +4641,7 @@ class BlockEditorView(Gtk.Box):
                 self._on_block_copy, 
                 self.file_ext, 
                 ai_engine=self.ai_engine, 
-                parent_window=self.get_root()
+                parent_window=self
             )
             
             # Indentation visuelle pour les enfants
@@ -4581,7 +4666,7 @@ class BlockEditorView(Gtk.Box):
                 self._on_block_copy, 
                 self.file_ext, 
                 ai_engine=self.ai_engine, 
-                parent_window=self.get_root()
+                parent_window=self
             )
             
             # Indentation visuelle pour les enfants
