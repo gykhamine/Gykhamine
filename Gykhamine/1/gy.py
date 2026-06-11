@@ -470,6 +470,7 @@ def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
     """
     Parseur de templates HTML/Jinja avec découpage hiérarchique profond.
     Détecte les blocs Django, les structures HTML et les logiques conditionnelles imbriquées.
+    CORRECTION : Analyse le HTML hors {% block %} avec une gestion logique des fermetures de balises (Stack).
     """
     lines = code.splitlines(keepends=True)
     blocks = []
@@ -477,6 +478,7 @@ def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
     # 1. Détection des blocs spéciaux racine (Style, Script, Django Block)
     i = 0
     special_blocks_indices = set()
+    django_blocks_found = []
     
     while i < len(lines):
         line = lines[i]
@@ -492,14 +494,15 @@ def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
                     end_idx = k
                     break
             raw = "".join(lines[start_idx:end_idx+1])
-            blocks.append({
+            block_data = {
                 "type": "django_block",
                 "name": f"block: {m.group(1)}",
                 "code": raw,
                 "start": start_idx,
                 "end": end_idx,
                 "children": []
-            })
+            }
+            django_blocks_found.append((start_idx, end_idx, block_data))
             for x in range(start_idx, end_idx+1): special_blocks_indices.add(x)
             i = end_idx + 1
             continue
@@ -529,13 +532,17 @@ def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
     def _recursive_parse(content_lines, start_offset=0, depth=0):
         local_blocks = []
         j = 0
-        structural_tags = {"div", "section", "article", "header", "footer", "nav", "main", "aside", "form", "table", "ul", "ol"}
-        void_tags = {"img", "input", "br", "hr", "meta", "link"}
+        # Balises structurelles élargies pour une meilleure couverture
+        structural_tags = {
+            "div", "section", "article", "header", "footer", "nav", "main", "aside", 
+            "form", "table", "ul", "ol", "li", "tr", "td", "th", "p", "span", "a",
+            "h1", "h2", "h3", "h4", "h5", "h6", "tbody", "thead", "tfoot"
+        }
+        void_tags = {"img", "input", "br", "hr", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
         
         while j < len(content_lines):
             line = content_lines[j]
             stripped = line.strip()
-            
             if not stripped:
                 j += 1
                 continue
@@ -550,7 +557,6 @@ def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
                     next_line = content_lines[k].strip()
                     if re.match(r"\{%-?\s*(if|for|with)\s+", next_line, re.IGNORECASE): depth_logic += 1
                     if re.match(r"\{%-?\s*end(if|for|with)\b", next_line, re.IGNORECASE): depth_logic -= 1
-                    
                     if depth_logic <= 0:
                         end_block = k
                         break
@@ -591,27 +597,49 @@ def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
                         name = f".{first_class}"
                     
                     start_block = j
-                    html_depth = 1
+                    tag_stack = []
+                    
+                    # Nettoyage des commentaires HTML pour éviter les faux positifs dans le comptage
+                    clean_stripped = re.sub(r'<!--.*?-->', '', stripped, flags=re.DOTALL)
+                    
+                    # Regex robuste : <tag suivi d'un espace, > ou fin de chaîne (évite </tag> ou <tagname>)
+                    line_opens = len(re.findall(rf"<{tag}(?:\s|>|$)", clean_stripped, re.IGNORECASE))
+                    line_closes = len(re.findall(rf"</{tag}\s*>", clean_stripped, re.IGNORECASE))
+                    
+                    for _ in range(line_opens): tag_stack.append(j)
+                    for _ in range(line_closes): 
+                        if tag_stack: tag_stack.pop()
+                    
                     end_block = j
                     k = j + 1
-                    
                     while k < len(content_lines):
                         next_line = content_lines[k]
                         next_stripped = next_line.strip()
                         
-                        opens = len(re.findall(rf"<{tag}[\s>]", next_stripped))
-                        closes = len(re.findall(rf"</{tag}\s*>", next_stripped))
-                        html_depth += opens - closes
+                        if not next_stripped:
+                            k += 1
+                            continue
+                            
+                        next_clean = re.sub(r'<!--.*?-->', '', next_stripped, flags=re.DOTALL)
                         
-                        if html_depth <= 0:
+                        opens = len(re.findall(rf"<{tag}(?:\s|>|$)", next_clean, re.IGNORECASE))
+                        closes = len(re.findall(rf"</{tag}\s*>", next_clean, re.IGNORECASE))
+                        
+                        for _ in range(opens): tag_stack.append(k)
+                        for _ in range(closes):
+                            if tag_stack: tag_stack.pop()
+                            
+                        # Dès que la pile est vide, on a trouvé la fermeture logique correspondante
+                        if not tag_stack:
                             end_block = k
                             break
                         k += 1
                     
-                    if html_depth > 0: end_block = len(content_lines) - 1
+                    # Sécurité : si la balise n'est jamais fermée, on la ferme à la fin du segment
+                    if tag_stack: 
+                        end_block = len(content_lines) - 1
                     
                     raw_code = "".join(content_lines[start_block:end_block+1])
-                    
                     inner_lines = content_lines[start_block+1 : end_block]
                     children = _recursive_parse(inner_lines, start_offset + start_block + 1, depth + 1)
                     
@@ -626,26 +654,50 @@ def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
                     })
                     j = end_block + 1
                     continue
-            
             j += 1
-            
         return local_blocks
 
-    # 3. Lancer le parsing récursif sur chaque bloc Django détecté au niveau 1
+    # 3. Assemblage final
     final_blocks = []
-    for b in blocks:
-        if b["type"] == "django_block":
-            content_lines = b["code"].splitlines(keepends=True)[1:-1]
-            if not content_lines:
-                final_blocks.append(b)
-            else:
-                children = _recursive_parse(content_lines, b["start"] + 1, 1)
-                b["children"] = children
-                final_blocks.append(b)
+    
+    # Traiter les blocs Django trouvés
+    for start_idx, end_idx, b_data in django_blocks_found:
+        content_lines = b_data["code"].splitlines(keepends=True)[1:-1] # Enlever les tags block/endblock
+        if content_lines:
+            children = _recursive_parse(content_lines, b_data["start"] + 1, 1)
+            b_data["children"] = children
+        final_blocks.append(b_data)
+
+    # Traiter le HTML "Orphelin" (hors des blocs Django et Style/Script)
+    orphan_lines = []
+    current_orphan_start = None
+    
+    for idx in range(len(lines)):
+        if idx not in special_blocks_indices:
+            if current_orphan_start is None:
+                current_orphan_start = idx
         else:
-            final_blocks.append(b)
-            
-    return final_blocks
+            if current_orphan_start is not None:
+                orphan_lines.append((current_orphan_start, idx - 1))
+                current_orphan_start = None
+    
+    if current_orphan_start is not None:
+        orphan_lines.append((current_orphan_start, len(lines) - 1))
+
+    # Parser chaque segment orphelin comme du HTML
+    for start, end in orphan_lines:
+        segment_lines = lines[start:end+1]
+        has_html = any(re.match(r"<([a-zA-Z0-9]+)", l.strip()) for l in segment_lines if l.strip())
+        
+        if has_html:
+            children = _recursive_parse(segment_lines, start, 0)
+            if children:
+                final_blocks.extend(children)
+
+    # Trier les blocs finaux par leur position de départ pour maintenir l'ordre du fichier
+    final_blocks.sort(key=lambda b: b['start'])
+    
+    return final_blocks if final_blocks else blocks
 def _parse_css_blocks(code: str, file_path: str) -> list[dict]:
     lines = code.splitlines(keepends=True)
     blocks, i, current_lines, current_start = [], 0, [], 0
