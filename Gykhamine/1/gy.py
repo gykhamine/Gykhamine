@@ -467,10 +467,14 @@ def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
 
 
 def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
+    """
+    Parseur de templates HTML/Jinja avec découpage hiérarchique profond.
+    Détecte les blocs Django, les structures HTML et les logiques conditionnelles imbriquées.
+    """
     lines = code.splitlines(keepends=True)
     blocks = []
     
-    # 1. Détection des blocs spéciaux (Style, Script, Django Block)
+    # 1. Détection des blocs spéciaux racine (Style, Script, Django Block)
     i = 0
     special_blocks_indices = set()
     
@@ -479,169 +483,169 @@ def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
         stripped = line.strip()
         start_idx = i
         
-        # Django Block
+        # Django Block Root
         m = re.match(r"\{%-?\s*block\s+(\w+).*?%\}", stripped, re.IGNORECASE)
         if m:
             end_idx = i
             for k in range(i+1, len(lines)):
-                if re.match(r"\{%-?\s*endblock\b", lines[k].strip(), re.IGNORECASE): 
+                if re.match(r"\{%-?\s*endblock\b", lines[k].strip(), re.IGNORECASE):
                     end_idx = k
                     break
-            
             raw = "".join(lines[start_idx:end_idx+1])
             blocks.append({
-                "type": "django_block", 
-                "name": f"block: {m.group(1)}", 
-                "code": raw, 
-                "start": start_idx, 
-                "end": end_idx, 
+                "type": "django_block",
+                "name": f"block: {m.group(1)}",
+                "code": raw,
+                "start": start_idx,
+                "end": end_idx,
                 "children": []
             })
-            
-            # On marque ces lignes comme traitées pour ne pas les ré-analyser comme HTML brut
-            for x in range(start_idx, end_idx+1): 
-                special_blocks_indices.add(x)
-            
+            for x in range(start_idx, end_idx+1): special_blocks_indices.add(x)
             i = end_idx + 1
             continue
             
-        # Style Block
+        # Style/Script Blocks
         if re.match(r"<style(\s[^>]*)?>$", stripped, re.IGNORECASE):
             end_idx = i
             for k in range(i+1, len(lines)):
-                if re.match(r"</style\s*>", lines[k].strip(), re.IGNORECASE): 
-                    end_idx = k
-                    break
+                if re.match(r"</style\s*>", lines[k].strip(), re.IGNORECASE): end_idx = k; break
             raw = "".join(lines[start_idx:end_idx+1])
             blocks.append({"type": "style", "name": "CSS Block (<style>)", "code": raw, "start": start_idx, "end": end_idx, "children": []})
             for x in range(start_idx, end_idx+1): special_blocks_indices.add(x)
-            i = end_idx + 1
-            continue
+            i = end_idx + 1; continue
             
-        # Script Block
         if re.match(r"<script(\s[^>]*)?>$", stripped, re.IGNORECASE):
             end_idx = i
             for k in range(i+1, len(lines)):
-                if re.match(r"</script\s*>", lines[k].strip(), re.IGNORECASE): 
-                    end_idx = k
-                    break
+                if re.match(r"</script\s*>", lines[k].strip(), re.IGNORECASE): end_idx = k; break
             raw = "".join(lines[start_idx:end_idx+1])
             blocks.append({"type": "script", "name": "JS Block (<script>)", "code": raw, "start": start_idx, "end": end_idx, "children": []})
             for x in range(start_idx, end_idx+1): special_blocks_indices.add(x)
-            i = end_idx + 1
-            continue
+            i = end_idx + 1; continue
             
         i += 1
 
-    # 2. Analyse HTML Atomique : On cherche les divs racines qui ne sont PAS dans les blocs spéciaux
-    def parse_html_structure(start_line, end_line):
+    # 2. Fonction Récursive pour parser le contenu HTML/Jinja en profondeur
+    def _recursive_parse(content_lines, start_offset=0, depth=0):
         local_blocks = []
-        j = start_line
-        
-        # Balises structurantes qu'on veut capturer comme blocs principaux
+        j = 0
         structural_tags = {"div", "section", "article", "header", "footer", "nav", "main", "aside", "form", "table", "ul", "ol"}
         void_tags = {"img", "input", "br", "hr", "meta", "link"}
         
-        while j <= end_line:
-            # Ignorer les lignes déjà prises par les blocs spéciaux (ex: block title)
-            if j in special_blocks_indices:
-                # On saute jusqu'à la fin du bloc spécial connu
-                found = False
-                for b in blocks:
-                    if b["start"] == j:
-                        local_blocks.append(b)
-                        j = b["end"] + 1
-                        found = True
-                        break
-                if not found: j += 1
-                continue
-                
-            line = lines[j]
+        while j < len(content_lines):
+            line = content_lines[j]
             stripped = line.strip()
             
             if not stripped:
                 j += 1
                 continue
                 
-            # Détection ouverture balise structurante
+            # A. Détection des Conditions Jinja {% if ... %} ou {% for ... %}
+            if re.match(r"\{%-?\s*(if|for|with)\s+", stripped, re.IGNORECASE):
+                start_block = j
+                depth_logic = 1
+                end_block = j
+                k = j + 1
+                while k < len(content_lines):
+                    next_line = content_lines[k].strip()
+                    if re.match(r"\{%-?\s*(if|for|with)\s+", next_line, re.IGNORECASE): depth_logic += 1
+                    if re.match(r"\{%-?\s*end(if|for|with)\b", next_line, re.IGNORECASE): depth_logic -= 1
+                    
+                    if depth_logic <= 0:
+                        end_block = k
+                        break
+                    k += 1
+                
+                raw_code = "".join(content_lines[start_block:end_block+1])
+                name_match = re.search(r"(if|for|with)\s+(.+?)\s*%\}", stripped, re.IGNORECASE)
+                block_name = f"Logic: {name_match.group(2).strip()[:30]}" if name_match else "Logic Block"
+                
+                inner_lines = content_lines[start_block+1 : end_block]
+                children = _recursive_parse(inner_lines, start_offset + start_block + 1, depth + 1)
+                
+                local_blocks.append({
+                    "type": "jinja_logic",
+                    "name": block_name,
+                    "code": raw_code,
+                    "start": start_offset + start_block,
+                    "end": start_offset + end_block,
+                    "children": children,
+                    "tag": "logic"
+                })
+                j = end_block + 1
+                continue
+
+            # B. Détection des Balises HTML Structurantes
             open_match = re.match(r"<([a-zA-Z0-9]+)(\s[^>]*)?>", stripped)
-            
             if open_match:
                 tag = open_match.group(1).lower()
-                
-                # Si c'est une balise structurante et pas auto-fermante
                 if tag in structural_tags and tag not in void_tags:
-                    # Nommer proprement
                     name = f"<{tag}>"
                     attrs = open_match.group(2) or ""
                     id_m = re.search(r'id=["\']([^"\']+)["\']', attrs)
                     class_m = re.search(r'class=["\']([^"\']+)["\']', attrs)
                     
                     if id_m: name = f"#{id_m.group(1)}"
-                    elif class_m: 
-                        # Prendre la première classe significative
+                    elif class_m:
                         first_class = class_m.group(1).split()[0]
                         name = f".{first_class}"
                     
                     start_block = j
-                    depth = 1
+                    html_depth = 1
+                    end_block = j
                     k = j + 1
-                    end_block = j # Par défaut
                     
-                    # Parcours pour trouver la balise fermante correspondante
-                    while k <= end_line:
-                        next_line = lines[k]
+                    while k < len(content_lines):
+                        next_line = content_lines[k]
                         next_stripped = next_line.strip()
                         
-                        # Compter les ouvertures et fermetures de cette même balise
                         opens = len(re.findall(rf"<{tag}[\s>]", next_stripped))
                         closes = len(re.findall(rf"</{tag}\s*>", next_stripped))
+                        html_depth += opens - closes
                         
-                        depth += opens - closes
-                        
-                        if depth <= 0:
+                        if html_depth <= 0:
                             end_block = k
                             break
                         k += 1
                     
-                    # Si on n'a pas trouvé de fermeture, on prend jusqu'à la fin disponible
-                    if depth > 0:
-                        end_block = end_line
+                    if html_depth > 0: end_block = len(content_lines) - 1
                     
-                    raw_code = "".join(lines[start_block:end_block+1])
+                    raw_code = "".join(content_lines[start_block:end_block+1])
+                    
+                    inner_lines = content_lines[start_block+1 : end_block]
+                    children = _recursive_parse(inner_lines, start_offset + start_block + 1, depth + 1)
                     
                     local_blocks.append({
                         "type": "html_tag",
                         "name": name,
                         "code": raw_code,
-                        "start": start_block,
-                        "end": end_block,
-                        "children": [], 
+                        "start": start_offset + start_block,
+                        "end": start_offset + end_block,
+                        "children": children,
                         "tag": tag
                     })
-                    
-                    # Avancer l'index principal après la fin du bloc capturé
                     j = end_block + 1
                     continue
-                    
-            # Si ce n'est pas une balise structurante ouvrante, on passe à la ligne suivante
+            
             j += 1
             
         return local_blocks
 
-    try:
-        # On analyse tout le fichier, mais parse_html_structure ignorera les indices spéciaux
-        html_structure = parse_html_structure(0, len(lines)-1)
-        
-        # Si on a trouvé des structures HTML, on les retourne
-        # Sinon, on retourne les blocks django bruts détectés plus haut
-        return html_structure if html_structure else blocks
-        
-    except Exception as e:
-        print(f"Erreur parsing template: {e}")
-        return blocks # Fallback
-
-
+    # 3. Lancer le parsing récursif sur chaque bloc Django détecté au niveau 1
+    final_blocks = []
+    for b in blocks:
+        if b["type"] == "django_block":
+            content_lines = b["code"].splitlines(keepends=True)[1:-1]
+            if not content_lines:
+                final_blocks.append(b)
+            else:
+                children = _recursive_parse(content_lines, b["start"] + 1, 1)
+                b["children"] = children
+                final_blocks.append(b)
+        else:
+            final_blocks.append(b)
+            
+    return final_blocks
 def _parse_css_blocks(code: str, file_path: str) -> list[dict]:
     lines = code.splitlines(keepends=True)
     blocks, i, current_lines, current_start = [], 0, [], 0
@@ -4258,6 +4262,31 @@ class BlockEditorView(Gtk.Box):
             if block.get("children"):
                 self._render_blocks_recursive(block["children"], container, level + 1)
 
+    def _render_blocks_recursive(self, blocks, container, level=0):
+        """Rend les blocs et leurs enfants de manière récursive avec indentation."""
+        for block in blocks:
+            card = BlockCard(
+                block, 
+                self._on_block_save, 
+                self._on_block_delete, 
+                self._on_block_copy, 
+                self.file_ext, 
+                ai_engine=self.ai_engine, 
+                parent_window=self.get_root()
+            )
+            
+            # Indentation visuelle pour les enfants
+            if level > 0:
+                card.set_margin_start(level * 20)
+                card.add_css_class("child-block") 
+            
+            container.append(card)
+            self._cards.append(card) 
+            
+            # Si le bloc a des enfants, on les rend récursivement
+            if block.get("children"):
+                self._render_blocks_recursive(block["children"], container, level + 1)
+
     def _render_blocks(self):
         while child := self.blocks_box.get_first_child(): 
             self.blocks_box.remove(child)
@@ -4540,6 +4569,15 @@ border: 1px solid #333;
 border-radius: 4px;
 padding: 4px;
 min-height: 30px;
+}
+
+/* Indentation des blocs enfants */
+.child-block {
+    border-left: 2px solid #333;
+    margin-left: 10px;
+}
+.block-card {
+    transition: margin-left 0.2s ease;
 }
 """
 
