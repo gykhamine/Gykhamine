@@ -2204,38 +2204,87 @@ class BlockCard(Gtk.Box):
 
     def _build_editor(self):
         self.editor_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        set_margins(self.editor_box, 0); self.editor_box.set_margin_start(12); self.editor_box.set_margin_end(12); self.editor_box.set_margin_bottom(8); self.editor_box.set_visible(False)
-        self.textview = Gtk.TextView(); self.textview.set_monospace(True); self.textview.set_wrap_mode(Gtk.WrapMode.NONE); self.textview.add_css_class("code-editor")
-        self.textview.get_buffer().set_text(self.block["code"]); apply_syntax_highlighting(self.textview, self.lang)
-        scroll = Gtk.ScrolledWindow(); scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC); scroll.set_size_request(-1, 200); scroll.set_child(self.textview)
+        set_margins(self.editor_box, 0)
+        self.editor_box.set_margin_start(12)
+        self.editor_box.set_margin_end(12)
+        self.editor_box.set_margin_bottom(8)
+        self.editor_box.set_visible(False)
+        
+        self.textview = Gtk.TextView()
+        self.textview.set_monospace(True)
+        self.textview.set_wrap_mode(Gtk.WrapMode.NONE)
+        self.textview.add_css_class("code-editor")
+        self.textview.get_buffer().set_text(self.block["code"])
+        apply_syntax_highlighting(self.textview, self.lang)
+        
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_size_request(-1, 200)
+        scroll.set_child(self.textview)
+        
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        btn_save = Gtk.Button(label="💾 Save"); btn_save.add_css_class("save-btn"); btn_save.connect("clicked", self._do_save)
-        btn_cancel = Gtk.Button(label="✕ Close"); btn_cancel.add_css_class("cancel-btn"); btn_cancel.connect("clicked", self._toggle_edit)
-        bar.append(btn_save); bar.append(btn_cancel); self.editor_box.append(scroll); self.editor_box.append(bar); self.append(self.editor_box)
+        # Bouton "Save" supprimé ici pour ne laisser que la gestion via la nav bar
+        btn_cancel = Gtk.Button(label="✕ Close")
+        btn_cancel.add_css_class("cancel-btn")
+        btn_cancel.connect("clicked", self._toggle_edit)
+        
+        bar.append(btn_cancel)
+        self.editor_box.append(scroll)
+        self.editor_box.append(bar)
+        self.append(self.editor_box)
 
     def _toggle_edit(self, *_):
-        self.expanded = not self.expanded; self.editor_box.set_visible(self.expanded)
+        if self.expanded:
+            # Sauvegarde automatique des modifications en mémoire avant de fermer l'aperçu
+            self.block["code"] = self.textview.get_buffer().get_text(
+                self.textview.get_buffer().get_start_iter(), 
+                self.textview.get_buffer().get_end_iter(), 
+                True
+            )
+            self.on_save_cb(self.block, self.block["code"])
+            
+        self.expanded = not self.expanded
+        self.editor_box.set_visible(self.expanded)
 
     def _view_code(self, *_):
         dialog = Gtk.Dialog(title=f"Editing: {self.block['name']}", transient_for=self.get_root())
         dialog.add_css_class("rounded-dialog")
         dialog.set_default_size(800, 500)
+        
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         set_margins(content, 12)
         dialog.set_child(content)
-        scroll = Gtk.ScrolledWindow(); scroll.set_vexpand(True); scroll.set_hexpand(True)
-        textview = Gtk.TextView(); textview.set_monospace(True); textview.set_editable(True); textview.set_wrap_mode(Gtk.WrapMode.WORD)
+        
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_hexpand(True)
+        
+        textview = Gtk.TextView()
+        textview.set_monospace(True)
+        textview.set_editable(True)
+        textview.set_wrap_mode(Gtk.WrapMode.WORD)
         textview.add_css_class("code-editor")
         textview.get_buffer().set_text(self.block["code"])
         apply_syntax_highlighting(textview, self.lang)
-        scroll.set_child(textview); content.append(scroll)
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6); btn_box.set_halign(Gtk.Align.END)
-        btn1 = Gtk.Button(label="📋 Copy"); btn1.connect("clicked", lambda *_: self._do_copy()); btn_box.append(btn1)
-        btn2 = Gtk.Button(label="Close"); btn2.connect("clicked", lambda *_: dialog.destroy()); btn_box.append(btn2)
-        btn3 = Gtk.Button(label="💾 Save and Close", css_classes=["suggested-action"]); btn3.connect("clicked", lambda *_: self._save_from_popup(textview, dialog)); btn_box.append(btn3)
+        
+        scroll.set_child(textview)
+        content.append(scroll)
+        
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_box.set_halign(Gtk.Align.END)
+        
+        btn1 = Gtk.Button(label="📋 Copy")
+        btn1.connect("clicked", lambda *_: self._do_copy())
+        btn_box.append(btn1)
+        
+        # Le bouton Fermer agit maintenant comme "Sauvegarder et Fermer" pour simplifier l'interface
+        btn_close = Gtk.Button(label="✕ Fermer (Sauvegarder)", css_classes=["suggested-action"])
+        btn_close.connect("clicked", lambda *_: self._save_from_popup(textview, dialog))
+        btn_box.append(btn_close)
+        
         content.append(btn_box)
         dialog.present()
-
+        
     def _save_from_popup(self, textview, dialog):
         self.block["code"] = textview.get_buffer().get_text(textview.get_buffer().get_start_iter(), textview.get_buffer().get_end_iter(), True)
         self.on_save_cb(self.block, self.block["code"]); self.textview.get_buffer().set_text(self.block["code"]); apply_syntax_highlighting(self.textview, self.lang); dialog.destroy()
@@ -2275,33 +2324,43 @@ class BlockCard(Gtk.Box):
         dialog.present()
 
     def _move_block(self, direction):
-        """Déplace le bloc (et toute sa hiérarchie d'enfants) vers le haut (-1) ou le bas (1)"""
+        """Déplace le bloc (et toute sa hiérarchie d'enfants) vers le haut (-1) ou le bas (1) et sauvegarde le fichier."""
+        
         def find_and_swap(blocks_list, target_block, dir):
             for i, b in enumerate(blocks_list):
                 if b is target_block:
+                    # Vérification des limites de la liste
                     if dir == -1 and i > 0:
                         blocks_list[i], blocks_list[i-1] = blocks_list[i-1], blocks_list[i]
                         return True
                     elif dir == 1 and i < len(blocks_list) - 1:
                         blocks_list[i], blocks_list[i+1] = blocks_list[i+1], blocks_list[i]
                         return True
-                # Recherche récursive dans les enfants
+                # Si ce n'est pas le bon bloc, on cherche récursivement DANS ses enfants
                 if "children" in b and b["children"]:
                     if find_and_swap(b["children"], target_block, dir):
                         return True
             return False
 
-        # self.parent_window est maintenant l'instance directe de BlockEditorView
+        # self.parent_window est l'instance de BlockEditorView
         editor_view = self.parent_window
         
         if hasattr(editor_view, 'blocks') and find_and_swap(editor_view.blocks, self.block, direction):
+            # 1. Mettre à jour l'état en mémoire (Undo/Redo) et l'affichage visuel
             editor_view._push_state()
             editor_view._render_blocks()
+            
+            # 2. NOUVEAU : Sauvegarder réellement le fichier sur le disque après le déplacement
+            # Cela assure que l'ordre des blocs (parents et enfants) est persisté
+            editor_view._save_file()
+            
+            # 3. Notification utilisateur
             if hasattr(editor_view, 'toast_cb'):
-                editor_view.toast_cb("✅ Bloc déplacé")
+                editor_view.toast_cb("✅ Bloc déplacé et fichier sauvegardé")
         else:
             if hasattr(editor_view, 'toast_cb'):
                 editor_view.toast_cb("⚠️ Limite de déplacement atteinte")
+
 
 class FilePanel(Gtk.Box):
     def __init__(self, on_file_select, on_project_select, on_file_created, on_file_imported):
@@ -6644,12 +6703,30 @@ class BlockEditorView(Gtk.Box):
             if card.expanded: card._toggle_edit()
 
     def _save_file(self, *_):
-        if not self.current_file: return self.toast_cb("❌ No file")
+        if not self.current_file: 
+            return self.toast_cb("❌ No file open")
+        
         try:
-            self.current_file.write_text("".join(b["code"] for b in self.blocks), encoding="utf-8")
-            self._push_state(); self.toast_cb(f"💾 Saved: {self.current_file.name}")
-        except Exception as e: self.toast_cb(f"❌ Error: {e}")
-
+            # 1. Créer un fichier de sauvegarde (.bak) contenant l'ancienne structure
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = self.current_file.with_suffix(f".{timestamp}{self.current_file.suffix}.bak")
+            
+            if self.current_file.exists():
+                shutil.copy2(self.current_file, backup_path)
+            
+            # 2. Écrire la nouvelle structure dans un fichier temporaire (sécurité anti-coupure)
+            temp_path = self.current_file.with_suffix(f".{timestamp}.tmp")
+            new_content = "".join(b["code"] for b in self.blocks)
+            temp_path.write_text(new_content, encoding="utf-8")
+            
+            # 3. Remplacer irréversiblement le fichier existant par le nouveau fichier
+            shutil.move(str(temp_path), str(self.current_file))
+            
+            self._push_state()
+            self.toast_cb(f"💾 Saved: {self.current_file.name} (Backup: {backup_path.name})")
+            
+        except Exception as e: 
+            self.toast_cb(f"❌ Error: {e}")
     def _run_current_file(self, *_):
         if not self.current_file: return self.toast_cb("❌ No file")
         if self.run_file_cb: self.run_file_cb(self.current_file)
