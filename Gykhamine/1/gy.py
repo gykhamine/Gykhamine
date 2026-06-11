@@ -355,9 +355,55 @@ def apply_syntax_highlighting(textview, lang):
 
 SEPARATOR_RE = re.compile(r'^#{4,}.*$|^/{4,}.*$|^-{4,}.*$', re.MULTILINE)
 
+
+
+
+
 def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
     lines = code.splitlines(keepends=True)
     blocks, i, current_lines, current_start = [], 0, [], 0
+
+    def _get_indent(line):
+        return len(line) - len(line.lstrip())
+
+    def _extract_children(parent_start_idx, parent_indent_level):
+        """Extrait récursivement les enfants (ex: méthodes d'une classe)"""
+        children = []
+        j = parent_start_idx + 1
+        child_lines = []
+        child_start = j
+        child_name = ""
+        child_type = ""
+
+        while j < len(lines):
+            line = lines[j]
+            stripped = line.strip()
+            if not stripped:
+                if child_lines: child_lines.append(line)
+                j += 1
+                continue
+
+            current_indent = _get_indent(line)
+            if current_indent <= parent_indent_level and stripped:
+                break
+            
+            is_method = re.match(r'^(async\s+)?def\s+(\w+)\s*\(', stripped)
+            if is_method:
+                if child_lines and child_name:
+                    children.append({"type": child_type, "name": child_name, "code": "".join(child_lines), "start": child_start, "end": child_start + len(child_lines) - 1, "children": []})
+                child_start = j
+                child_lines = [line]
+                child_name = is_method.group(2)
+                child_type = "function"
+                j += 1
+            else:
+                child_lines.append(line)
+                j += 1
+
+        if child_lines and child_name:
+            children.append({"type": child_type, "name": child_name, "code": "".join(child_lines), "start": child_start, "end": child_start + len(child_lines) - 1, "children": []})
+        return children
+
     def flush(label_override=None):
         nonlocal current_lines, current_start
         if not current_lines: return
@@ -370,84 +416,271 @@ def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
             elif re.search(r'\bdef\s+(\w+)\s*\(', stripped): btype, bname = "function", re.search(r'\bdef\s+(\w+)\s*\(', stripped).group(1)
             elif stripped.startswith("#"): btype, bname = "comment", stripped[:60]
             else: btype, bname = "other", stripped[:40] if stripped else "bloc"
-            blocks.append({"type": btype, "name": bname, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
+            
+            children = []
+            if btype == "class":
+                children = _extract_children(current_start, 0)
+
+            blocks.append({"type": btype, "name": bname, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1, "children": children})
         current_lines, current_start = [], i
 
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
+        
         if SEPARATOR_RE.match(stripped):
             flush()
-            blocks.append({"type": "separator", "name": stripped.strip("#/-").strip() or "Séparateur", "code": line, "start": i, "end": i})
+            blocks.append({"type": "separator", "name": stripped.strip("#/-").strip() or "Séparateur", "code": line, "start": i, "end": i, "children": []})
             current_start = i + 1
             i += 1
             continue
-        
+
         is_root_block_start = not line.startswith((" ", "\t")) and (
             stripped.startswith("@") or
             re.match(r'^(async\s+)?def\s+\w+', stripped) or
             re.match(r'^class\s+\w+', stripped) or
             stripped.startswith("#")
         )
+
         if is_root_block_start:
             flush()
             current_start = i
-            # Handle decorators
             while i < len(lines) and lines[i].strip().startswith("@"):
-                current_lines.append(lines[i])
-                i += 1
+                current_lines.append(lines[i]); i += 1
             if i < len(lines):
-                current_lines.append(lines[i])
-                i += 1
-            # Handle body
+                current_lines.append(lines[i]); i += 1
             while i < len(lines):
                 l = lines[i]
                 if l.strip() == "" or l.startswith((" ", "\t")):
-                    current_lines.append(l)
-                    i += 1
+                    current_lines.append(l); i += 1
                 elif not l.startswith((" ", "\t")) and (l.strip().startswith("@") or re.match(r'^(async\s+)?def\s+\w+', l.strip()) or re.match(r'^class\s+\w+', l.strip()) or l.strip().startswith("#")):
                     break
                 else:
-                    current_lines.append(l)
-                    i += 1
+                    current_lines.append(l); i += 1
             flush()
             continue
-        current_lines.append(line)
-        i += 1
+        
+        current_lines.append(line); i += 1
+    
     flush()
     return blocks
+
 
 def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
     lines = code.splitlines(keepends=True)
-    blocks, i, current_lines, current_start, current_type, current_name = [], 0, [], 0, "template_part", "Template"
-    def flush():
-        nonlocal current_lines, current_start, current_type, current_name
-        if not current_lines: return
-        raw = "".join(current_lines)
-        if raw.strip(): blocks.append({"type": current_type, "name": current_name, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
-        current_lines, current_start, current_type, current_name = [], i, "template_part", "Template"
-
+    blocks = []
+    
+    # 1. Détection des blocs spéciaux (Style, Script, Django Block)
+    i = 0
+    special_blocks_indices = set()
+    
     while i < len(lines):
-        line = lines[i]; stripped = line.strip()
-        m = re.match(r'\{%-?\s*block\s+(\w+).*?%\}', stripped, re.IGNORECASE)
-        if m: flush(); current_type, current_name, current_start = "django_block", f"block: {m.group(1)}", i; current_lines.append(line); i += 1; continue
-        if re.match(r'\{%-?\s*endblock\b', stripped, re.IGNORECASE): current_lines.append(line); flush(); current_start = i + 1; i += 1; continue
-        if re.match(r'<style(\s[^>]*)?>$', stripped, re.IGNORECASE): flush(); current_type, current_name, current_start = "style", "CSS Block (<style>)", i; current_lines.append(line); i += 1; continue
-        if re.match(r'</style\s*>', stripped, re.IGNORECASE): current_lines.append(line); flush(); current_start = i + 1; i += 1; continue
-        if re.match(r'<script(\s[^>]*)?>$', stripped, re.IGNORECASE): flush(); current_type, current_name, current_start = "script", "JS Block (<script>)", i; current_lines.append(line); i += 1; continue
-        if re.match(r'</script\s*>', stripped, re.IGNORECASE): current_lines.append(line); flush(); current_start = i + 1; i += 1; continue
-        current_lines.append(line); i += 1
-    flush()
-    return blocks
+        line = lines[i]
+        stripped = line.strip()
+        start_idx = i
+        
+        # Django Block
+        m = re.match(r"\{%-?\s*block\s+(\w+).*?%\}", stripped, re.IGNORECASE)
+        if m:
+            end_idx = i
+            for k in range(i+1, len(lines)):
+                if re.match(r"\{%-?\s*endblock\b", lines[k].strip(), re.IGNORECASE): 
+                    end_idx = k
+                    break
+            
+            raw = "".join(lines[start_idx:end_idx+1])
+            blocks.append({
+                "type": "django_block", 
+                "name": f"block: {m.group(1)}", 
+                "code": raw, 
+                "start": start_idx, 
+                "end": end_idx, 
+                "children": []
+            })
+            
+            # On marque ces lignes comme traitées pour ne pas les ré-analyser comme HTML brut
+            for x in range(start_idx, end_idx+1): 
+                special_blocks_indices.add(x)
+            
+            i = end_idx + 1
+            continue
+            
+        # Style Block
+        if re.match(r"<style(\s[^>]*)?>$", stripped, re.IGNORECASE):
+            end_idx = i
+            for k in range(i+1, len(lines)):
+                if re.match(r"</style\s*>", lines[k].strip(), re.IGNORECASE): 
+                    end_idx = k
+                    break
+            raw = "".join(lines[start_idx:end_idx+1])
+            blocks.append({"type": "style", "name": "CSS Block (<style>)", "code": raw, "start": start_idx, "end": end_idx, "children": []})
+            for x in range(start_idx, end_idx+1): special_blocks_indices.add(x)
+            i = end_idx + 1
+            continue
+            
+        # Script Block
+        if re.match(r"<script(\s[^>]*)?>$", stripped, re.IGNORECASE):
+            end_idx = i
+            for k in range(i+1, len(lines)):
+                if re.match(r"</script\s*>", lines[k].strip(), re.IGNORECASE): 
+                    end_idx = k
+                    break
+            raw = "".join(lines[start_idx:end_idx+1])
+            blocks.append({"type": "script", "name": "JS Block (<script>)", "code": raw, "start": start_idx, "end": end_idx, "children": []})
+            for x in range(start_idx, end_idx+1): special_blocks_indices.add(x)
+            i = end_idx + 1
+            continue
+            
+        i += 1
+
+    # 2. Analyse HTML Atomique : On cherche les divs racines qui ne sont PAS dans les blocs spéciaux
+    def parse_html_structure(start_line, end_line):
+        local_blocks = []
+        j = start_line
+        
+        # Balises structurantes qu'on veut capturer comme blocs principaux
+        structural_tags = {"div", "section", "article", "header", "footer", "nav", "main", "aside", "form", "table", "ul", "ol"}
+        void_tags = {"img", "input", "br", "hr", "meta", "link"}
+        
+        while j <= end_line:
+            # Ignorer les lignes déjà prises par les blocs spéciaux (ex: block title)
+            if j in special_blocks_indices:
+                # On saute jusqu'à la fin du bloc spécial connu
+                found = False
+                for b in blocks:
+                    if b["start"] == j:
+                        local_blocks.append(b)
+                        j = b["end"] + 1
+                        found = True
+                        break
+                if not found: j += 1
+                continue
+                
+            line = lines[j]
+            stripped = line.strip()
+            
+            if not stripped:
+                j += 1
+                continue
+                
+            # Détection ouverture balise structurante
+            open_match = re.match(r"<([a-zA-Z0-9]+)(\s[^>]*)?>", stripped)
+            
+            if open_match:
+                tag = open_match.group(1).lower()
+                
+                # Si c'est une balise structurante et pas auto-fermante
+                if tag in structural_tags and tag not in void_tags:
+                    # Nommer proprement
+                    name = f"<{tag}>"
+                    attrs = open_match.group(2) or ""
+                    id_m = re.search(r'id=["\']([^"\']+)["\']', attrs)
+                    class_m = re.search(r'class=["\']([^"\']+)["\']', attrs)
+                    
+                    if id_m: name = f"#{id_m.group(1)}"
+                    elif class_m: 
+                        # Prendre la première classe significative
+                        first_class = class_m.group(1).split()[0]
+                        name = f".{first_class}"
+                    
+                    start_block = j
+                    depth = 1
+                    k = j + 1
+                    end_block = j # Par défaut
+                    
+                    # Parcours pour trouver la balise fermante correspondante
+                    while k <= end_line:
+                        next_line = lines[k]
+                        next_stripped = next_line.strip()
+                        
+                        # Compter les ouvertures et fermetures de cette même balise
+                        opens = len(re.findall(rf"<{tag}[\s>]", next_stripped))
+                        closes = len(re.findall(rf"</{tag}\s*>", next_stripped))
+                        
+                        depth += opens - closes
+                        
+                        if depth <= 0:
+                            end_block = k
+                            break
+                        k += 1
+                    
+                    # Si on n'a pas trouvé de fermeture, on prend jusqu'à la fin disponible
+                    if depth > 0:
+                        end_block = end_line
+                    
+                    raw_code = "".join(lines[start_block:end_block+1])
+                    
+                    local_blocks.append({
+                        "type": "html_tag",
+                        "name": name,
+                        "code": raw_code,
+                        "start": start_block,
+                        "end": end_block,
+                        "children": [], 
+                        "tag": tag
+                    })
+                    
+                    # Avancer l'index principal après la fin du bloc capturé
+                    j = end_block + 1
+                    continue
+                    
+            # Si ce n'est pas une balise structurante ouvrante, on passe à la ligne suivante
+            j += 1
+            
+        return local_blocks
+
+    try:
+        # On analyse tout le fichier, mais parse_html_structure ignorera les indices spéciaux
+        html_structure = parse_html_structure(0, len(lines)-1)
+        
+        # Si on a trouvé des structures HTML, on les retourne
+        # Sinon, on retourne les blocks django bruts détectés plus haut
+        return html_structure if html_structure else blocks
+        
+    except Exception as e:
+        print(f"Erreur parsing template: {e}")
+        return blocks # Fallback
+
 
 def _parse_css_blocks(code: str, file_path: str) -> list[dict]:
     lines = code.splitlines(keepends=True)
     blocks, i, current_lines, current_start = [], 0, [], 0
+
+    def _extract_css_children(parent_start, parent_end):
+        children = []
+        j = parent_start
+        while j <= parent_end:
+            line = lines[j]; stripped = line.strip()
+            if stripped and '{' in stripped and not stripped.startswith('/*'):
+                start_child = j
+                name = stripped.split('{')[0].strip()[:40]
+                # Trouver la fin du bloc enfant
+                depth = 0
+                end_child = j
+                for k in range(j, parent_end + 1):
+                    depth += lines[k].count('{') - lines[k].count('}')
+                    if depth == 0: end_child = k; break
+                raw = "".join(lines[start_child:end_child+1])
+                children.append({"type": "style_rule", "name": name, "code": raw, "start": start_child, "end": end_child, "children": []})
+                j = end_child + 1
+            else:
+                j += 1
+        return children
+
     def flush(label="CSS Rule"):
         nonlocal current_lines, current_start
         if not current_lines: return
         raw = "".join(current_lines)
-        if raw.strip(): blocks.append({"type": "style_rule", "name": label, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
+        if raw.strip():
+            name = label
+            if '{' in raw:
+                name = re.sub(r'\s+', ' ', raw.split('{')[0].strip()[:40]) or "CSS Rule"
+            # Si c'est un bloc avec accolades, on extrait les enfants
+            children = []
+            if '{' in raw and '}' in raw:
+                children = _extract_css_children(current_start, current_start + len(current_lines) - 1)
+            
+            blocks.append({"type": "style_rule", "name": name, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1, "children": children})
         current_lines, current_start = [], i
 
     while i < len(lines):
@@ -461,37 +694,92 @@ def _parse_css_blocks(code: str, file_path: str) -> list[dict]:
 def _parse_js_blocks(code: str, file_path: str) -> list[dict]:
     lines = code.splitlines(keepends=True)
     blocks, i, current_lines, current_start = [], 0, [], 0
+    
+    def _extract_js_children(parent_start, parent_end, parent_indent):
+        children = []
+        j = parent_start + 1
+        while j <= parent_end:
+            line = lines[j]; stripped = line.strip()
+            indent = len(line) - len(line.lstrip())
+            if indent > parent_indent and re.match(r'^(async\s+)?function\s+\w+|^\w+\s*\(.*\)\s*\{|^\w+\s*=\s*function|^\w+\s*:\s*function', stripped):
+                start_child = j
+                name = re.search(r'(?:function\s+)?(\w+)\s*\(', stripped)
+                name = name.group(1) if name else "Anonymous"
+                # Trouver la fin simple (basique)
+                end_child = j
+                depth = 0
+                for k in range(j, parent_end + 1):
+                    depth += lines[k].count('{') - lines[k].count('}')
+                    if depth == 0: end_child = k; break
+                raw = "".join(lines[start_child:end_child+1])
+                children.append({"type": "function", "name": name, "code": raw, "start": start_child, "end": end_child, "children": []})
+                j = end_child + 1
+            else:
+                j += 1
+        return children
+
     def flush(label="JS Block"):
         nonlocal current_lines, current_start
         if not current_lines: return
         raw = "".join(current_lines)
-        if raw.strip(): blocks.append({"type": "script_block", "name": label, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
+        if raw.strip():
+            parts = raw.strip().split(); 
+            name = f"{parts[0]} {parts[1].split('(')[0].split('=')[0]}"[:40] if len(parts) >= 2 else parts[0]
+            children = []
+            if 'class ' in raw or '{' in raw:
+                children = _extract_js_children(current_start, current_start + len(current_lines) - 1, 0)
+            blocks.append({"type": "script_block", "name": name, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1, "children": children})
         current_lines, current_start = [], i
 
     while i < len(lines):
         line = lines[i]; stripped = line.strip()
         if re.match(r'^(class|function|async\s+function|const|let|var|export|import)\s+', stripped) or re.match(r'^//\s*#{4,}', stripped):
-            parts = stripped.split(); flush(f"{parts[0]} {parts[1].split('(')[0].split('=')[0]}"[:40] if len(parts) >= 2 else parts[0]); current_start = i; current_lines.append(line)
+            flush(f"{stripped.split()[0]} {stripped.split()[1].split('(')[0]}"[:40] if len(stripped.split()) >= 2 else stripped.split()[0]); current_start = i; current_lines.append(line)
         else: current_lines.append(line); i += 1
     flush("End of file"); return blocks
 
 def _parse_c_blocks(code: str, file_path: str) -> list[dict]:
     lines = code.splitlines(keepends=True)
     blocks, i, current_lines, current_start = [], 0, [], 0
+    
+    def _extract_c_children(parent_start, parent_end):
+        children = []
+        j = parent_start + 1
+        while j <= parent_end:
+            line = lines[j]; stripped = line.strip()
+            if re.match(r'^(void|int|char|float|double|bool|auto|unsigned|signed|long|short)\s+\w+\s*\(', stripped):
+                start_child = j
+                name = re.search(r'\w+\s*\(', stripped).group(0).replace('(', '').strip()
+                end_child = j
+                depth = 0
+                for k in range(j, parent_end + 1):
+                    depth += lines[k].count('{') - lines[k].count('}')
+                    if depth == 0: end_child = k; break
+                raw = "".join(lines[start_child:end_child+1])
+                children.append({"type": "function", "name": name, "code": raw, "start": start_child, "end": end_child, "children": []})
+                j = end_child + 1
+            else:
+                j += 1
+        return children
+
     def flush(label="C/C++ Block"):
         nonlocal current_lines, current_start
         if not current_lines: return
         raw = "".join(current_lines)
-        if raw.strip(): blocks.append({"type": "c_block", "name": label, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1})
+        if raw.strip():
+            parts = raw.strip().split(); name = " ".join(parts[:2])[:40]
+            children = []
+            if 'class ' in raw or 'struct ' in raw or '{' in raw:
+                children = _extract_c_children(current_start, current_start + len(current_lines) - 1)
+            blocks.append({"type": "c_block", "name": name, "code": raw, "start": current_start, "end": current_start + len(current_lines) - 1, "children": children})
         current_lines, current_start = [], i
 
     while i < len(lines):
         line = lines[i]; stripped = line.strip()
         if re.match(r'^(class|struct|enum|namespace)\s+\w+', stripped) or re.match(r'^(void|int|char|float|double|bool|auto|unsigned|signed|long|short)\s+\w+\s*\(', stripped) or re.match(r'^#\s*(include|define|pragma|ifdef|ifndef|endif)', stripped) or re.match(r'^//\s*#{4,}', stripped):
-            parts = stripped.split(); flush(" ".join(parts[:2])[:40]); current_start = i; current_lines.append(line)
+            flush(" ".join(stripped.split()[:2])[:40]); current_start = i; current_lines.append(line)
         else: current_lines.append(line); i += 1
     flush("End of file"); return blocks
-
 def parse_blocks(code: str, file_path: str = "") -> list[dict]:
     ext = Path(file_path).suffix.lower()
     if ext in ('.html', '.jinja', '.jinja2', '.htm'): return _parse_template_blocks(code, file_path)
@@ -3870,12 +4158,115 @@ class BlockEditorView(Gtk.Box):
     def _open_linked_css(self, *_):
         if self.css_file and self.css_file.exists(): self._save_file(); self.load_file(self.css_file); self.toast_cb(f"🎨 {self.css_file.name}")
 
+    def _render_blocks_recursive(self, blocks, container, level=0):
+        """Rend les blocs et leurs enfants de manière récursive avec indentation."""
+        for block in blocks:
+            card = BlockCard(
+                block, 
+                self._on_block_save, 
+                self._on_block_delete, 
+                self._on_block_copy, 
+                self.file_ext, 
+                ai_engine=self.ai_engine, 
+                parent_window=self.get_root()
+            )
+            
+            # Indentation visuelle pour les enfants
+            if level > 0:
+                card.set_margin_start(level * 20)
+                card.add_css_class("child-block") 
+            
+            container.append(card)
+            self._cards.append(card) 
+            
+            # Si le bloc a des enfants, on les rend récursivement
+            if block.get("children"):
+                self._render_blocks_recursive(block["children"], container, level + 1)
+
+    def _render_blocks_recursive(self, blocks, container, level=0):
+        """Rend les blocs et leurs enfants de manière récursive avec indentation."""
+        for block in blocks:
+            card = BlockCard(
+                block, 
+                self._on_block_save, 
+                self._on_block_delete, 
+                self._on_block_copy, 
+                self.file_ext, 
+                ai_engine=self.ai_engine, 
+                parent_window=self.get_root()
+            )
+            
+            # Indentation visuelle pour les enfants
+            if level > 0:
+                card.set_margin_start(level * 20)
+                card.add_css_class("child-block") 
+            
+            container.append(card)
+            self._cards.append(card) 
+            
+            # Si le bloc a des enfants, on les rend récursivement
+            if block.get("children"):
+                self._render_blocks_recursive(block["children"], container, level + 1)
+
+    def _render_blocks_recursive(self, blocks, container, level=0):
+        """Rend les blocs et leurs enfants de manière récursive avec indentation."""
+        for block in blocks:
+            card = BlockCard(
+                block, 
+                self._on_block_save, 
+                self._on_block_delete, 
+                self._on_block_copy, 
+                self.file_ext, 
+                ai_engine=self.ai_engine, 
+                parent_window=self.get_root()
+            )
+            
+            # Indentation visuelle pour les enfants
+            if level > 0:
+                card.set_margin_start(level * 20)
+                card.add_css_class("child-block") 
+            
+            container.append(card)
+            self._cards.append(card) 
+            
+            # Si le bloc a des enfants, on les rend récursivement
+            if block.get("children"):
+                self._render_blocks_recursive(block["children"], container, level + 1)
+
+    def _render_blocks_recursive(self, blocks, container, level=0):
+        """Rend les blocs et leurs enfants de manière récursive avec indentation."""
+        for block in blocks:
+            card = BlockCard(
+                block, 
+                self._on_block_save, 
+                self._on_block_delete, 
+                self._on_block_copy, 
+                self.file_ext, 
+                ai_engine=self.ai_engine, 
+                parent_window=self.get_root()
+            )
+            
+            # Indentation visuelle pour les enfants
+            if level > 0:
+                card.set_margin_start(level * 20)
+                card.add_css_class("child-block") 
+            
+            container.append(card)
+            self._cards.append(card) 
+            
+            # Si le bloc a des enfants, on les rend récursivement
+            if block.get("children"):
+                self._render_blocks_recursive(block["children"], container, level + 1)
+
     def _render_blocks(self):
-        while child := self.blocks_box.get_first_child(): self.blocks_box.remove(child)
-        self.lbl_count.set_text(str(len(self.blocks))); self._cards = []
-        for block in self.blocks:
-            card = BlockCard(block, self._on_block_save, self._on_block_delete, self._on_block_copy, self.file_ext, ai_engine=self.ai_engine, parent_window=self.get_root())
-            self.blocks_box.append(card); self._cards.append(card)
+        while child := self.blocks_box.get_first_child(): 
+            self.blocks_box.remove(child)
+        
+        self.lbl_count.set_text(str(len(self.blocks)))
+        self._cards = []
+        
+        # Appel récursif initial au niveau 0
+        self._render_blocks_recursive(self.blocks, self.blocks_box, level=0)
 
     def _on_block_save(self, block, new_code):
         block["code"] = new_code; self._push_state(); self.toast_cb("✅ Updated")
