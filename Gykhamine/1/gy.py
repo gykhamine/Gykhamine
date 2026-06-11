@@ -1631,21 +1631,56 @@ class FilePanel(Gtk.Box):
         nav_bar.append(btn_files); nav_bar.append(btn_recent); nav_bar.append(btn_new); nav_bar.append(btn_import); nav_bar.append(self.btn_hidden)
         self.append(nav_bar)
 
-    def start_watcher(self, root_path):
-        if self.watcher: self.watcher.running = False; self.watcher = None
-        if root_path:
-            self.watcher = FileWatcher(root_path, self._refresh_tree_idle)
-            self.watcher.start()
+    def _log_message(self, msg):
+        """Tente d'envoyer le message au terminal parent ou affiche un toast."""
+        try:
+            # Essayer d'accéder au panneau terminal via la fenêtre parente
+            root = self.get_root()
+            if root and hasattr(root, 'terminal_panel'):
+                root.terminal_panel._log(msg)
+            else:
+                # Fallback vers un toast si le terminal n'est pas accessible
+                self._show_toast(msg)
+        except Exception:
+            pass
 
-    def _refresh_tree_idle(self): GLib.idle_add(self._refresh_tree)
+    def start_watcher(self, root_path):
+        if self.watcher: 
+            self.watcher.running = False
+            self.watcher = None
+        if root_path:
+            try:
+                self.watcher = FileWatcher(root_path, self._refresh_tree_idle)
+                self.watcher.start()
+            except Exception as e:
+                self._log_message(f"⚠️ Erreur démarrage watcher: {e}")
+
+    def _refresh_tree_idle(self): 
+        GLib.idle_add(self._refresh_tree)
+
     def _refresh_tree(self):
-        if self.project_root: self._populate_tree(self.project_root, None)
+        if not self.project_root:
+            return
+        
+        # CORRECTION CRITIQUE : Vider le store avant de repeupler pour éviter les doublons
+        self.tree_store.clear()
+        
+        try:
+            self._populate_tree(self.project_root, None)
+        except Exception as e:
+            self._log_message(f"❌ Erreur rafraîchissement arbre: {e}")
 
     def _toggle_hidden_files(self, *_):
         self.show_hidden = not self.show_hidden
-        if self.show_hidden: self.btn_hidden.set_label("👁"); self.btn_hidden.set_tooltip_text("Masquer les fichiers cachés")
-        else: self.btn_hidden.set_label("🙈"); self.btn_hidden.set_tooltip_text("Afficher les fichiers cachés")
-        if self.project_root: self.load_project(self.project_root, load_config())
+        if self.show_hidden: 
+            self.btn_hidden.set_label("👁")
+            self.btn_hidden.set_tooltip_text("Masquer les fichiers cachés")
+        else: 
+            self.btn_hidden.set_label("🙈")
+            self.btn_hidden.set_tooltip_text("Afficher les fichiers cachés")
+        
+        if self.project_root: 
+            self.load_project(self.project_root, load_config())
 
     def _on_tree_cell_data(self, column, cell, model, tree_iter, data):
         name = model.get_value(tree_iter, 0); is_folder = model.get_value(tree_iter, 2)
@@ -1673,22 +1708,60 @@ class FilePanel(Gtk.Box):
             if Path(full_path).exists(): self.on_file_select(Path(full_path))
 
     def load_project(self, root: Path, config: dict):
-        self.project_root = root; self.tree_store.clear(); self._populate_tree(root, None); self._load_recent_projects(config)
-        self.start_watcher(root)
+        self.project_root = root
+        
+        # CORRECTION CRITIQUE : Vider complètement le TreeStore
+        self.tree_store.clear()
+        
+        try:
+            self._populate_tree(root, None)
+            self._load_recent_projects(config)
+            self.start_watcher(root)
+        except Exception as e:
+            self._log_message(f"❌ Erreur chargement projet: {e}")
 
     def _populate_tree(self, directory: Path, parent_iter):
+        """Remplit l'arbre récursivement. Toutes les erreurs sont loggées."""
+        if not directory:
+            return
+
         try:
+            # Vérifier si le dossier existe encore
+            if not directory.exists():
+                self._log_message(f"⚠️ Le dossier n'existe plus: {directory}")
+                return
+
             entries = []
             for entry in directory.iterdir():
-                if entry.name in ["__pycache__", "node_modules", ".git"]: continue
-                if not self.show_hidden and entry.name.startswith('.'): continue
+                # Filtres standards
+                if entry.name in ["__pycache__", "node_modules", ".git", ".venv", "venv"]: 
+                    continue
+                if not self.show_hidden and entry.name.startswith('.'): 
+                    continue
+                
                 entries.append(entry)
+            
+            # Tri : Dossiers d'abord, puis fichiers, par ordre alphabétique insensible à la casse
             entries.sort(key=lambda p: (not p.is_dir(), p.name.lower()))
+            
             for entry in entries:
-                is_folder = entry.is_dir()
-                new_iter = self.tree_store.append(parent_iter, [entry.name, str(entry), is_folder])
-                if is_folder: self._populate_tree(entry, new_iter)
-        except PermissionError: pass
+                try:
+                    is_folder = entry.is_dir()
+                    # Ajout au store
+                    new_iter = self.tree_store.append(parent_iter, [entry.name, str(entry), is_folder])
+                    
+                    # Si c'est un dossier, on explore récursivement
+                    if is_folder: 
+                        self._populate_tree(entry, new_iter)
+                except PermissionError:
+                    self._log_message(f"⛔ Permission refusée pour: {entry.name}")
+                except Exception as e:
+                    self._log_message(f"⚠️ Erreur lecture entrée {entry.name}: {e}")
+                    
+        except PermissionError:
+            self._log_message(f"⛔ Permission refusée pour le dossier: {directory}")
+        except Exception as e:
+            self._log_message(f"❌ Erreur critique dans _populate_tree ({directory}): {e}")
 
     def _load_recent_projects(self, config):
         while child := self.recent_list.get_first_child(): self.recent_list.remove(child)
@@ -1721,8 +1794,12 @@ class FilePanel(Gtk.Box):
             filepath = self.project_root / filename
             if filepath.exists(): return self._show_error(f"{filename} existe déjà")
             text = text_buf.get_text(text_buf.get_start_iter(), text_buf.get_end_iter(), True) or f"# {filename}\n# Créé avec Gykhamine Studio\n"
-            filepath.write_text(text, encoding='utf-8')
-            self.on_file_created(filepath); self.load_project(self.project_root, load_config()); dialog.destroy()
+            try:
+                filepath.write_text(text, encoding='utf-8')
+                self.on_file_created(filepath); self.load_project(self.project_root, load_config()); dialog.destroy()
+            except Exception as e:
+                self._log_message(f"❌ Erreur création fichier: {e}")
+                self._show_error(f"Erreur: {e}")
         btn_create.connect("clicked", on_create); btn_cancel.connect("clicked", lambda *_: dialog.destroy()); dialog.present()
 
     def _import_file(self, *_):
@@ -1737,7 +1814,9 @@ class FilePanel(Gtk.Box):
                 if dst.exists() and Gtk.MessageDialog(transient_for=self.get_root(), flags=0, message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.YES_NO, text="Fichier existant", secondary_text=f"{dst.name} existe. Écraser ?").run() != Gtk.ResponseType.YES:
                     return
                 shutil.copy2(src, dst); self.on_file_imported(dst); self.load_project(self.project_root, load_config())
-        except Exception as e: self._show_error(f"Erreur: {e}")
+        except Exception as e: 
+            self._log_message(f"❌ Erreur importation: {e}")
+            self._show_error(f"Erreur: {e}")
 
     def _show_error(self, msg: str):
         root = self.get_root()
@@ -1780,7 +1859,9 @@ class FilePanel(Gtk.Box):
             if new_path.exists(): self._show_error(f"'{new_name}' existe déjà"); return
             try:
                 Path(full_path).rename(new_path); self.load_project(self.project_root, load_config()); self._show_toast(f"✅ Renommé en '{new_name}'")
-            except Exception as e: self._show_error(f"Erreur: {e}")
+            except Exception as e: 
+                self._log_message(f"❌ Erreur renommage: {e}")
+                self._show_error(f"Erreur: {e}")
             dialog.destroy()
         btn_rename.connect("clicked", on_rename); btn_cancel.connect("clicked", lambda *_: dialog.destroy()); dialog.present()
 
@@ -1799,10 +1880,11 @@ class FilePanel(Gtk.Box):
                 if path.is_dir(): shutil.rmtree(path)
                 else: path.unlink()
                 self.load_project(self.project_root, load_config()); self._show_toast(f"🗑 Supprimé: {name}")
-            except Exception as e: self._show_error(f"Erreur: {e}")
+            except Exception as e: 
+                self._log_message(f"❌ Erreur suppression: {e}")
+                self._show_error(f"Erreur: {e}")
             dialog.destroy()
         btn_delete.connect("clicked", on_delete); btn_cancel.connect("clicked", lambda *_: dialog.destroy()); dialog.present()
-
 class TerminalPanel(Gtk.Box):
     def __init__(self, get_project_root, get_config, show_toast):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
