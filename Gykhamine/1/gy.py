@@ -17,6 +17,32 @@ from datetime import datetime
 import time
 
 
+
+# ═══════════════════════════════════════════════════════════════════════
+#  HELPER : LECTURE .ENV EXTERNE (Simple & Robuste)
+# ═══════════════════════════════════════════════════════════════════════
+def get_env_value(key: str, default: str = "") -> str:
+    """
+    Lit un fichier .env externe pour récupérer une variable.
+    Utilise 'with' pour une gestion propre des fichiers.
+    """
+    env_path = Path("/run/media/gykhamine/GY/Gykhamine/gy/.env")
+    if not env_path.exists():
+        return default
+    
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    # Match KEY=VALUE ou KEY="VALUE"
+                    match = re.match(rf'^{re.escape(key)}\s*=\s*["\']?(.*?)["\']?$', line)
+                    if match:
+                        return match.group(1).strip()
+    except Exception:
+        pass
+    return default
+
 # ═══════════════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════════════
 #  GTK4 UTILITIES
@@ -103,7 +129,7 @@ def auto_mount_gy():
     # ⚠️ REMPLACEZ "VOTRE_UUID_ICI" par l'UUID réel de votre partition /dev/sdb
     # Pour le trouver, lancez dans un terminal : sudo blkid /dev/sdb*
     # Exemple : GY_DEVICE = "UUID=a1b2c3d4-e5f6-7890-g1h2-i3j4k5l6m7n8"
-    GY_DEVICE = "UUID=7a8cbe9a-8869-4382-ab24-fa742fe90eca"  
+    GY_DEVICE = get_env_value("GY_PARTITION_UUID", get_env_value("GY_PARTITION_UUID", "UUID=7a8cbe9a-8869-4382-ab24-fa742fe90eca"))  
     GY_MOUNT_POINT = "/run/media/gykhamine/GYl"
     
     is_mounted = False
@@ -136,6 +162,58 @@ def auto_mount_gy():
 if not auto_mount_gy():
     print("⚠️ Le montage automatique a échoué. L'application va continuer mais certains chemins GY peuvent être inaccessibles.")
     
+
+# ═══════════════════════════════════════════════════════════════════════
+#  HELPER : LECTURE .ENV EXTERNE POUR UUID
+# ═══════════════════════════════════════════════════════════════════════
+def get_env_value(key: str, default: str = "") -> str:
+    
+    #Lit un fichier .env externe pour récupérer une variable d'environnement.
+    #Cherche par défaut dans /run/media/gykhamine/GY/Gykhamine/gy/.env
+    
+    env_path = Path("/run/media/gykhamine/GY/Gykhamine/gy/.env")
+    if not env_path.exists():
+        return default
+    
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    # Match KEY=VALUE ou KEY="VALUE"
+                    match = re.match(rf'^{re.escape(key)}\s*=\s*["\']?(.*?)["\']?$', line)
+                    if match:
+                        return match.group(1).strip()
+    except Exception:
+        pass
+    return default
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  HELPER : LECTURE .ENV EXTERNE (Simple & Robuste)
+# ═══════════════════════════════════════════════════════════════════════
+def get_env_value(key: str, default: str = "") -> str:
+    """
+    Lit un fichier .env externe pour récupérer une variable.
+    Utilise 'with' pour une gestion propre des fichiers.
+    """
+    env_path = Path("/run/media/gykhamine/GY/Gykhamine/gy/.env")
+    if not env_path.exists():
+        return default
+    
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    # Match KEY=VALUE ou KEY="VALUE"
+                    match = re.match(rf'^{re.escape(key)}\s*=\s*["\']?(.*?)["\']?$', line)
+                    if match:
+                        return match.group(1).strip()
+    except Exception:
+        pass
+    return default
+
 # 2. Définition des valeurs par défaut uniquement
 DEFAULT_CONFIG = {
     "llama_server_path": "/run/media/gykhamine/GY/gysingner/llama-server",
@@ -155,7 +233,7 @@ DEFAULT_CONFIG = {
     "default_port_range_end": 8010,
     "log_file_path":     os.path.expanduser("/run/media/gykhamine/GY/logs/studio.log"),
     "db_path":           os.path.expanduser("/run/media/gykhamine/GY/db/gykhamine_studio.db"),
-    "pg_device":         "UUID=16815455-ad07-4bc6-a9f9-ee9f0b0a6246",  # Remplacez par le vrai UUID de sdb3
+    "pg_device":         get_env_value("PG_PARTITION_UUID", get_env_value("PG_PARTITION_UUID", "UUID=16815455-ad07-4bc6-a9f9-ee9f0b0a6246")),  # Remplacez par le vrai UUID de sdb3
     "pg_mount_point":    "/var/lib/pgsql/data",
     "pg_db_name":        "ma_base",
     "pg_db_user":        "mon_user",
