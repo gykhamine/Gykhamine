@@ -355,7 +355,16 @@ def apply_syntax_highlighting(textview, lang):
 
 SEPARATOR_RE = re.compile(r'^#{4,}.*$|^/{4,}.*$|^-{4,}.*$', re.MULTILINE)
 
-
+def _find_matching_brace(lines, start_idx):
+    """Trouve l'index de la ligne contenant l'accolade fermante correspondante."""
+    depth = 0
+    for i in range(start_idx, len(lines)):
+        # On compte les accolades. (Une version parfaite ignorerait les chaînes, 
+        # mais ce compteur suffit pour 99% du code bien formaté).
+        depth += lines[i].count('{') - lines[i].count('}')
+        if depth == 0:
+            return i
+    return len(lines) - 1
 
 
 
