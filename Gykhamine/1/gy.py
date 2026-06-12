@@ -1383,6 +1383,8 @@ class BlockAIEngine:
 
 # Dans la classe BlockAIEngine, remplacez les méthodes _build_prompt et process_modification par :
 
+# Dans la classe BlockAIEngine, remplacez les méthodes _build_prompt et process_modification par :
+
     def _build_prompt(self, block_type, current_code, user_intent, context_deps="", mode="modify", custom_role=None):
         roles = {
             "function": "Tu es un expert Python Senior spécialisé en optimisation et clean code.",
@@ -1417,9 +1419,9 @@ class BlockAIEngine:
 4. Format JSON attendu : {"erreur": "Description courte", "cause": "Explication technique", "solution": "Commande ou action concrète", "severite": "critique/moyen/faible"}"""
         elif mode == "business_process":
             format_instruction = """RÈGLE ABSOLUE (JSON STRICT) :
-1. Tu dois générer UNIQUEMENT une liste de tâches structurée en JSON pour résoudre le problème métier.
+1. Tu dois générer UNIQUEMENT une réponse structurée en JSON selon les instructions spécifiques de ton rôle.
 2. N'ajoute AUCUN texte explicatif, AUCUNE balise markdown (interdiction formelle de ```json).
-3. Format JSON attendu : [{"etape": 1, "tache": "Nom de la tâche", "fichier_cible": "app/models.py", "details": "Description technique précise de l'implémentation"}]"""
+3. Respecte scrupuleusement le format JSON demandé dans ta description de rôle."""
         else:
             format_instruction = "RÈGLE ABSOLUE : Ne réponds QUE par le code modifié ou la réponse demandée. N'ajoute AUCUN texte explicatif superflu."
             
@@ -1432,6 +1434,37 @@ OBJECTIF : {format_instruction}
 """
         return prompt
 
+    def process_modification(self, block_type, current_code, user_intent, context_deps="", mode="modify", custom_role=None):
+        cfg = self.get_config()
+        host = cfg.get("llama_host", "127.0.0.1")
+        port = cfg.get("llama_port", "8080")
+        url = f"http://{host}:{port}/v1/chat/completions"
+        prompt = self._build_prompt(block_type, current_code, user_intent, context_deps, mode=mode, custom_role=custom_role)
+        payload = {
+            "model": "qwen2.5-coder",
+            "messages": [
+                {"role": "system", "content": "Tu es un moteur de génération de code strict. Tu ne parles pas, tu codes."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "max_tokens": 2048,
+            "stream": False
+        }
+        try:
+            self.log(f"🤖 Envoi de la requête IA ({mode})...")
+            response = requests.post(url, json=payload, timeout=12000)
+            if response.status_code == 200:
+                data = response.json()
+                raw_content = data['choices'][0]['message']['content']
+                cleaned_code = self._clean_code_output(raw_content, block_type if mode != "terminal_gen" else "shell")
+                return cleaned_code
+            else:
+                self.log(f"❌ Erreur API IA: {response.status_code}")
+                return None
+        except Exception as e:
+            self.log(f"❌ Exception connexion IA: {e}")
+            return None
     def process_modification(self, block_type, current_code, user_intent, context_deps="", mode="modify", custom_role=None):
         cfg = self.get_config()
         host = cfg.get("llama_host", "127.0.0.1")
@@ -2118,22 +2151,24 @@ class GitManagerDialog(Gtk.Dialog):
         entry.connect("activate", on_ok)
         dialog.present()
 
+# Remplacez entièrement la classe BusinessProcessDialog par :
+
 class BusinessProcessDialog(Gtk.Dialog):
     def __init__(self, parent, ai_engine, log_callback, config_getter=None):
-        super().__init__(title="🧠 Élaborateur de Processus & Assistant IA", transient_for=parent, default_width=850, default_height=650)
+        super().__init__(title="🧠 Assistant IA & Élaborateur de Processus", transient_for=parent, default_width=850, default_height=650)
         self.add_css_class("rounded-dialog")
         self.ai_engine = ai_engine
         self.log_callback = log_callback
         self.config_getter = config_getter
         
-        # Rôles par défaut calibrés et très explicites
+        # Rôles par défaut calibrés et très explicites (orientés JSON)
         self.default_roles = {
-            "Élaborateur": "Tu es un expert algorithmique de processus métier. Tu sais décomposer un problème complexe en tâches techniques précises, ordonnées et réalisables.",
-            "Prof de programmation": "Tu es un professeur de programmation pédagogue et expert. Tu expliques les concepts clairement, étape par étape, avec des exemples concrets et des bonnes pratiques.",
-            "Expert en Django": "Tu es un architecte logiciel Django Senior. Tu privilégies les bonnes pratiques, la sécurité, l'optimisation des requêtes ORM, l'architecture MVT et le code propre (Clean Code).",
-            "Traducteur": "Tu es un traducteur technique expert. Tu traduis les demandes et les réponses avec une précision absolue en conservant le jargon technique et le contexte approprié.",
-            "Expert Linux": "Tu es un administrateur système Linux et DevOps expert. Tu fournis des commandes shell optimisées, sécurisées, des scripts bash robustes et des solutions d'automatisation.",
-            "Expert en astuce en informatique": "Tu es un guru de l'informatique. Tu donnes des astuces, des raccourcis clavier, des outils méconnus et des solutions ingénieuses pour résoudre des problèmes techniques rapidement."
+            "Élaborateur": "Tu es un expert algorithmique de processus métier. Tu sais décomposer un problème complexe en tâches techniques précises, ordonnées et réalisables. Réponds UNIQUEMENT avec un tableau JSON d'étapes : [{'etape': 1, 'tache': '...', 'fichier': '...', 'details': '...'}].",
+            "Prof de programmation": "Tu es un professeur de programmation pédagogue et expert. Tu expliques les concepts clairement. Réponds UNIQUEMENT avec un objet JSON : {'explication': '...', 'exemple_code': '...', 'bonnes_pratiques': ['...']}.",
+            "Expert en Django": "Tu es un architecte logiciel Django Senior. Tu privilégies les bonnes pratiques et la sécurité. Réponds UNIQUEMENT avec un objet JSON : {'analyse': '...', 'fichiers_a_modifier': ['...'], 'code_propose': '...'}.",
+            "Traducteur": "Tu es un traducteur technique expert. Tu traduis les demandes avec une précision absolue. Réponds UNIQUEMENT avec un objet JSON : {'original': '...', 'traduction': '...'}.",
+            "Expert Linux": "Tu es un administrateur système Linux et DevOps expert. Tu fournis des commandes shell optimisées. Réponds UNIQUEMENT avec un objet JSON : {'commande': '...', 'explication': '...', 'avertissements': '...'}.",
+            "Expert en astuce en informatique": "Tu es un guru de l'informatique. Tu donnes des astuces et solutions ingénieuses. Réponds UNIQUEMENT avec un objet JSON : {'astuce': '...', 'contexte_utilisation': '...', 'gain_estime': '...'}."
         }
         
         content = self.get_content_area()
@@ -2168,7 +2203,7 @@ class BusinessProcessDialog(Gtk.Dialog):
         content.append(role_box)
         content.append(Gtk.Separator(margin_top=8, margin_bottom=8))
 
-        # --- Section 2: Problème ---
+        # --- Section 2: Demande ---
         content.append(Gtk.Label(label="2. Décrivez votre demande ou problème :", xalign=0, css_classes=["heading"]))
         scroll_in = Gtk.ScrolledWindow()
         scroll_in.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -2178,7 +2213,7 @@ class BusinessProcessDialog(Gtk.Dialog):
         scroll_in.set_child(self.txt_problem)
         content.append(scroll_in)
         
-        btn_generate = Gtk.Button(label="🤖 Générer la réponse")
+        btn_generate = Gtk.Button(label="🤖 Générer la réponse (JSON)")
         btn_generate.add_css_class("suggested-action")
         btn_generate.set_halign(Gtk.Align.END)
         btn_generate.connect("clicked", self._on_generate)
@@ -2186,7 +2221,7 @@ class BusinessProcessDialog(Gtk.Dialog):
         content.append(Gtk.Separator(margin_top=8, margin_bottom=8))
         
         # --- Section 3: Résultat ---
-        content.append(Gtk.Label(label="3. Résultat :", xalign=0, css_classes=["heading"]))
+        content.append(Gtk.Label(label="3. Résultat (JSON Strict) :", xalign=0, css_classes=["heading"]))
         scroll_out = Gtk.ScrolledWindow()
         scroll_out.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll_out.set_vexpand(True)
@@ -2220,12 +2255,16 @@ class BusinessProcessDialog(Gtk.Dialog):
         content.append(entry_name)
         
         content.append(Gtk.Label(label="Prompt d'entête (Calibrage du rôle) :", xalign=0, margin_top=8))
+        content.append(Gtk.Label(label="⚠️ Important : Précisez explicitement le format JSON attendu dans ce prompt.", xalign=0, css_classes=["dim-label"], margin_bottom=4))
+        
         scroll_prompt = Gtk.ScrolledWindow()
         scroll_prompt.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll_prompt.set_size_request(-1, 120)
+        
         text_prompt = Gtk.TextView()
         text_prompt.set_wrap_mode(Gtk.WrapMode.WORD)
-        text_prompt.set_placeholder_text("Ex: Tu es un expert en cybersécurité. Tu analyses les vulnérabilités et proposes des correctifs concrets.")
+        # La ligne set_placeholder_text a été supprimée car elle n'existe pas pour Gtk.TextView dans GTK4
+        
         scroll_prompt.set_child(text_prompt)
         content.append(scroll_prompt)
         
@@ -2265,9 +2304,7 @@ class BusinessProcessDialog(Gtk.Dialog):
             dialog.destroy()
             
         btn_save.connect("clicked", on_save)
-        btn_cancel.connect("clicked", lambda *_: dialog.destroy())
         dialog.present()
-
     def _on_generate(self, *_):
         problem = self.txt_problem.get_buffer().get_text(
             self.txt_problem.get_buffer().get_start_iter(),
@@ -2277,11 +2314,10 @@ class BusinessProcessDialog(Gtk.Dialog):
             self.log_callback("❌ Veuillez décrire votre demande.")
             return
             
-        # Récupérer le rôle sélectionné
         active_text = self.combo_role.get_active_text()
-        selected_role_prompt = self.default_roles.get(active_text) or self.custom_roles.get(active_text, "Tu es un assistant IA polyvalent.")
+        selected_role_prompt = self.default_roles.get(active_text) or self.custom_roles.get(active_text, "Tu es un assistant IA polyvalent. Réponds UNIQUEMENT en format JSON.")
         
-        self.log_callback(f"🤖 Génération en cours avec le rôle : {active_text}...")
+        self.log_callback(f"🤖 Génération en cours avec le rôle : {active_text} (Sortie JSON obligatoire)...")
         self.txt_result.get_buffer().set_text("Génération en cours...")
         
         def _thread():
@@ -2289,13 +2325,14 @@ class BusinessProcessDialog(Gtk.Dialog):
                 "business_process",
                 "Contexte: Demande utilisateur",
                 problem,
-                mode="business_process",
+                mode="business_process", # Force le format JSON strict et le nettoyage du chunk
                 custom_role=selected_role_prompt
             )
             if result:
+                # Nettoyage garanti des balises markdown ```json par le parseur
                 clean_result = self.ai_engine._clean_json_output(result)
                 GLib.idle_add(lambda: self.txt_result.get_buffer().set_text(clean_result))
-                GLib.idle_add(lambda: self.log_callback(f"📊 RÉPONSE GÉNÉRÉE (Rôle: {active_text})."))
+                GLib.idle_add(lambda: self.log_callback(f"📊 RÉPONSE GÉNÉRÉE (Rôle: {active_text}, Format: JSON)."))
             else:
                 GLib.idle_add(lambda: self.txt_result.get_buffer().set_text("❌ Échec de la génération IA."))
                 GLib.idle_add(lambda: self.log_callback("❌ Échec de la génération."))
@@ -2309,8 +2346,7 @@ class BusinessProcessDialog(Gtk.Dialog):
         ).strip()
         if text and text != "Génération en cours..." and not text.startswith("❌"):
             Gdk.Display.get_default().get_clipboard().set(text)
-            self.log_callback("✅ Résultat copié dans le presse-papiers.")
-# ═══════════════════════════════════════════════════════════════════════
+            self.log_callback("✅ Résultat JSON copié dans le presse-papiers.")# ═══════════════════════════════════════════════════════════════════════
 #  WIDGETS
 # ═══════════════════════════════════════════════════════════════════════
 TYPE_ICONS = {"import": "📦", "class": "🏛", "function": "⚡", "separator": "─", "comment": "💬", "other": "▪", "template": "🌐", "template_part": "🌐", "django_block": "🧩", "style": "🎨", "style_rule": "🎨", "script": "⚙️", "script_block": "⚡", "c_block": "⚙️"}
@@ -3438,10 +3474,11 @@ class ControlPanel(Gtk.Box):
         dialog = GitManagerDialog(self.get_root(), self.get_project_root(), self.terminal._log)
         dialog.present()
 
+# Dans la classe ControlPanel, remplacez la méthode _open_business_process par :
+
     def _open_business_process(self, *_):
         dialog = BusinessProcessDialog(self.get_root(), self.terminal.ai_engine, self.terminal._log, config_getter=self.get_config)
-        dialog.present()
-    # ═══════════════════════════════════════════════════════════════════════
+        dialog.present()    # ═══════════════════════════════════════════════════════════════════════
     #  GESTION SYSTÈME AVANCÉE (Firewall, Réseau, Systemd LiveOS)
     # ═══════════════════════════════════════════════════════════════════════
 
