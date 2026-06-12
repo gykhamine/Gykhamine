@@ -15,6 +15,25 @@ import os, sys, re, subprocess, threading, shutil, json, webbrowser, socket, zip
 from pathlib import Path
 from datetime import datetime
 import time
+# ═══════════════════════════════════════════════════════════════════════
+#  GLOBAL LOGGER SYSTEM (Centralisation des erreurs)
+# ═══════════════════════════════════════════════════════════════════════
+_global_log_callbacks = []
+
+def register_logger(callback):
+    """Permet au TerminalPanel de s'enregistrer pour recevoir les logs"""
+    if callback not in _global_log_callbacks:
+        _global_log_callbacks.append(callback)
+
+def global_log(message: str):
+    """Écrit le message dans tous les loggers enregistrés ET dans la console"""
+    print(message) # Fallback console
+    for cb in _global_log_callbacks:
+        try:
+            cb(message)
+        except:
+            pass
+
 
 
 
@@ -39,8 +58,8 @@ def get_env_value(key: str, default: str = "") -> str:
                     match = re.match(rf'^{re.escape(key)}\s*=\s*["\']?(.*?)["\']?$', line)
                     if match:
                         return match.group(1).strip()
-    except Exception:
-        pass
+    except Exception as e:
+        global_log(f"⚠️ Erreur lecture .env pour {key}: {e}")
     return default
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -184,8 +203,8 @@ def get_env_value(key: str, default: str = "") -> str:
                     match = re.match(rf'^{re.escape(key)}\s*=\s*["\']?(.*?)["\']?$', line)
                     if match:
                         return match.group(1).strip()
-    except Exception:
-        pass
+    except Exception as e:
+        global_log(f"⚠️ Erreur lecture .env pour {key}: {e}")
     return default
 
 
@@ -210,8 +229,8 @@ def get_env_value(key: str, default: str = "") -> str:
                     match = re.match(rf'^{re.escape(key)}\s*=\s*["\']?(.*?)["\']?$', line)
                     if match:
                         return match.group(1).strip()
-    except Exception:
-        pass
+    except Exception as e:
+        global_log(f"⚠️ Erreur lecture .env pour {key}: {e}")
     return default
 
 # 2. Définition des valeurs par défaut uniquement
@@ -352,7 +371,8 @@ def memory_record(config: dict, project: str, file_path: str, block_name: str = 
         con.execute("INSERT OR REPLACE INTO memory (project, file_path, block_name, action, ts) VALUES (?, ?, ?, ?, ?)", (project, file_path, block_name or "", action, datetime.now().isoformat()))
         con.commit()
         con.close()
-    except Exception: pass
+    except Exception as e: 
+        global_log(f"❌ Échec enregistrement mémoire (SQLite): {e}")
 
 def _get_log_path(config: dict) -> Path:
     p = Path(config.get("log_file_path", DEFAULT_CONFIG["log_file_path"]))
@@ -363,7 +383,8 @@ def log_to_file(config: dict, message: str):
     try:
         with open(_get_log_path(config), "a", encoding="utf-8") as f:
             f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
-    except Exception: pass
+    except Exception as e: 
+        global_log(f"❌ Échec écriture fichier log: {e}")
 
 def is_port_in_use(port: int, host: str = "0.0.0.0") -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -3826,44 +3847,613 @@ class ControlPanel(Gtk.Box):
 
     # ─── 2. CONFIGURATION DNS COMPLÈTE ──────────────────────────────────────────
     def _build_dns_page(self):
+        """Construit l'onglet DNS avec Formulaire, Gestion Service et Permissions Auto"""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         set_margins(box, 16)
-        box.append(Gtk.Label(label="Configuration DNS Système", xalign=0, css_classes=["heading"]))
         
-        grid = Gtk.Grid(); grid.set_column_spacing(10); grid.set_row_spacing(10)
+        # --- Section 1: Contrôle du Service Dnsmasq (Vos boutons conservés) ---
+        box.append(Gtk.Label(label="🛡️ Service Dnsmasq", xalign=0, css_classes=["heading"]))
+        
+        status_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.lbl_dnsmasq_status = Gtk.Label(label="Statut: Inconnu", xalign=0, css_classes=["dim-label"])
+        status_box.append(self.lbl_dnsmasq_status)
+        
+        # Boutons de contrôle du service
+        btn_start = Gtk.Button(label="▶ Démarrer", css_classes=["ctrl-btn-start"])
+        btn_start.connect("clicked", lambda *_: self._control_dnsmasq("start"))
+        
+        btn_stop = Gtk.Button(label="⏹ Arrêter", css_classes=["ctrl-btn-stop"])
+        btn_stop.connect("clicked", lambda *_: self._control_dnsmasq("stop"))
+        
+        btn_restart = Gtk.Button(label="🔄 Redémarrer", css_classes=["ctrl-btn-warn"])
+        btn_restart.connect("clicked", lambda *_: self._control_dnsmasq("restart"))
+        
+        status_box.append(btn_start)
+        status_box.append(btn_stop)
+        status_box.append(btn_restart)
+        box.append(status_box)
+        
+        box.append(Gtk.Separator(margin_top=10, margin_bottom=10))
+
+        # --- Section 2: Configuration DNS Client (/etc/resolv.conf) ---
+        box.append(Gtk.Label(label="📡 DNS Client (Résolution)", xalign=0, css_classes=["heading"]))
+        grid_client = Gtk.Grid(); grid_client.set_column_spacing(10); grid_client.set_row_spacing(10)
         row = 0
         
-        # État actuel
-        grid.attach(Gtk.Label(label="DNS Actuels (/etc/resolv.conf):", xalign=0), 0, row, 1, 1)
-        self.txt_current_dns = Gtk.TextView(); self.txt_current_dns.set_editable(False); self.txt_current_dns.set_monospace(True); self.txt_current_dns.set_size_request(-1, 80)
-        s_dns = Gtk.ScrolledWindow(); s_dns.set_child(self.txt_current_dns); grid.attach(s_dns, 1, row, 1, 1); row += 1
+        grid_client.attach(Gtk.Label(label="Serveurs actuels :", xalign=0), 0, row, 1, 1)
+        self.txt_current_dns = Gtk.TextView(); self.txt_current_dns.set_editable(False); self.txt_current_dns.set_monospace(True); self.txt_current_dns.set_size_request(-1, 50)
+        s_dns = Gtk.ScrolledWindow(); s_dns.set_child(self.txt_current_dns); grid_client.attach(s_dns, 1, row, 1, 1); row += 1
         
-        # Configuration Manuelle
-        grid.attach(Gtk.Label(label="Serveurs DNS (séparés par espace ou virgule):", xalign=0), 0, row, 1, 1)
-        self.entry_new_dns = Gtk.Entry(); self.entry_new_dns.set_text("1.1.1.1 8.8.8.8 9.9.9.9"); self.entry_new_dns.set_hexpand(True)
-        grid.attach(self.entry_new_dns, 1, row, 1, 1); row += 1
+        grid_client.attach(Gtk.Label(label="Nouveaux DNS (ex: 1.1.1.1 8.8.8.8):", xalign=0), 0, row, 1, 1)
+        self.entry_new_dns = Gtk.Entry(); self.entry_new_dns.set_text("1.1.1.1 8.8.8.8"); self.entry_new_dns.set_hexpand(True)
+        grid_client.attach(self.entry_new_dns, 1, row, 1, 1); row += 1
         
-        # Boutons d'action
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        btn_box_client = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         btn_apply = Gtk.Button(label="💾 Appliquer (Sudo)", css_classes=["suggested-action"])
         btn_apply.connect("clicked", self._apply_dns)
         btn_restore = Gtk.Button(label="↺ Restaurer DHCP")
         btn_restore.connect("clicked", self._restore_dns_dhcp)
-        btn_test = Gtk.Button(label="🔍 Tester Résolution")
-        btn_test.connect("clicked", self._test_dns_connectivity)
+        btn_box_client.append(btn_apply); btn_box_client.append(btn_restore)
+        grid_client.attach(btn_box_client, 1, row, 1, 1)
         
-        btn_box.append(btn_apply); btn_box.append(btn_restore); btn_box.append(btn_test)
-        grid.attach(btn_box, 1, row, 1, 1)
-        
-        box.append(grid)
-        
-        # Info supplémentaire
-        info_lbl = Gtk.Label(label="Note: La modification directe de /etc/resolv.conf peut être écrasée par NetworkManager. Utilisez 'Restaurer DHCP' si vous perdez la connexion.", css_classes=["dim-label"], xalign=0, wrap=True)
-        box.append(info_lbl)
+        box.append(grid_client)
+        box.append(Gtk.Separator(margin_top=10, margin_bottom=10))
 
+        # --- Section 3: Formulaire de Configuration Dnsmasq ---
+        box.append(Gtk.Label(label="⚙️ Configuration Dnsmasq (Formulaire)", xalign=0, css_classes=["heading"]))
+        
+        form_grid = Gtk.Grid()
+        form_grid.set_column_spacing(10)
+        form_grid.set_row_spacing(10)
+        r = 0
+
+        # Champ 1: Serveurs DNS Amont
+        form_grid.attach(Gtk.Label(label="DNS Amont (Upstream) :", xalign=0), 0, r, 1, 1)
+        self.entry_upstream_dns = Gtk.Entry()
+        self.entry_upstream_dns.set_placeholder_text("8.8.8.8, 1.1.1.1")
+        self.entry_upstream_dns.set_tooltip_text("IPs des serveurs DNS principaux")
+        self.entry_upstream_dns.set_hexpand(True)
+        form_grid.attach(self.entry_upstream_dns, 1, r, 1, 1)
+        r += 1
+
+        # Champ 2: Adresses Statiques Locales
+        form_grid.attach(Gtk.Label(label="Hôtes Locaux (Nom -> IP) :", xalign=0), 0, r, 1, 1)
+        self.entry_local_addr = Gtk.Entry()
+        self.entry_local_addr.set_placeholder_text("monserveur.local -> 192.168.1.10")
+        self.entry_local_addr.set_tooltip_text("Associe un nom de domaine à une IP locale")
+        self.entry_local_addr.set_hexpand(True)
+        form_grid.attach(self.entry_local_addr, 1, r, 1, 1)
+        r += 1
+
+        # Champ 3: Blocage de Domaines
+        form_grid.attach(Gtk.Label(label="Domaines Bloqués :", xalign=0), 0, r, 1, 1)
+        self.entry_blocked = Gtk.Entry()
+        self.entry_blocked.set_placeholder_text("pub.example.com, ads.net")
+        self.entry_blocked.set_tooltip_text("Ces domaines pointeront vers 0.0.0.0")
+        self.entry_blocked.set_hexpand(True)
+        form_grid.attach(self.entry_blocked, 1, r, 1, 1)
+        r += 1
+
+        # Champ 4: Interface
+        form_grid.attach(Gtk.Label(label="Interface Écoute :", xalign=0), 0, r, 1, 1)
+        self.entry_interface = Gtk.Entry()
+        self.entry_interface.set_text("lo, eth0")
+        self.entry_interface.set_hexpand(True)
+        form_grid.attach(self.entry_interface, 1, r, 1, 1)
+        r += 1
+
+        box.append(form_grid)
+
+        # Bouton Sauvegarde Configuration
+        btn_save_config = Gtk.Button(label="💾 Sauvegarder Config Dnsmasq", css_classes=["suggested-action"], halign=Gtk.Align.END, margin_top=10)
+        btn_save_config.connect("clicked", self._save_dnsmasq_from_form)
+        box.append(btn_save_config)
+
+        # Chargement initial des données
         GLib.idle_add(self._read_current_dns)
+        GLib.idle_add(self._check_dnsmasq_status)
+        
         return box
 
+    def _control_dnsmasq(self, action):
+        """Gère le démarrage/arrêt/redémarrage avec sudo"""
+        self.terminal._log(f"▶ Dnsmasq : {action}...")
+        def _thread():
+            try:
+                proc = subprocess.run(["sudo", "systemctl", action, "dnsmasq"], capture_output=True, text=True)
+                if proc.returncode == 0:
+                    GLib.idle_add(lambda: self.show_toast(f"✅ Dnsmasq {action}é"))
+                    GLib.idle_add(self._check_dnsmasq_status)
+                else:
+                    GLib.idle_add(lambda: self.terminal._log(f"❌ Erreur: {proc.stderr}"))
+            except Exception as e:
+                GLib.idle_add(lambda: self.terminal._log(f"❌ Exception: {e}"))
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _check_dnsmasq_status(self):
+        """Vérifie l'état du service pour l'affichage"""
+        try:
+            proc = subprocess.run(["systemctl", "is-active", "dnsmasq"], capture_output=True, text=True)
+            status = proc.stdout.strip()
+            if status == "active":
+                self.lbl_dnsmasq_status.set_text("Statut: 🟢 Actif")
+                self.lbl_dnsmasq_status.remove_css_class("dim-label")
+            else:
+                self.lbl_dnsmasq_status.set_text("Statut: 🔴 Inactif")
+                self.lbl_dnsmasq_status.add_css_class("dim-label")
+        except:
+            pass
+
+    def _save_dnsmasq_from_form(self, *_):
+        """Génère le fichier /etc/dnsmasq.d/local.conf depuis le formulaire"""
+        upstream = self.entry_upstream_dns.get_text().strip()
+        local_addr = self.entry_local_addr.get_text().strip()
+        blocked = self.entry_blocked.get_text().strip()
+        interface = self.entry_interface.get_text().strip()
+
+        config_lines = ["# Généré par Gykhamine Studio - Formulaire DNS"]
+        
+        if interface:
+            for iface in interface.split(','):
+                config_lines.append(f"interface={iface.strip()}")
+            config_lines.append("bind-interfaces")
+        
+        if upstream:
+            for dns in re.split(r'[,\s]+', upstream):
+                if dns: config_lines.append(f"server={dns}")
+
+        if local_addr and '->' in local_addr:
+            parts = local_addr.split('->')
+            if len(parts) == 2:
+                config_lines.append(f"address=/{parts[0].strip()}/{parts[1].strip()}")
+
+        if blocked:
+            for domain in re.split(r'[,\s]+', blocked):
+                if domain: config_lines.append(f"address=/{domain}/0.0.0.0")
+
+        final_content = "\n".join(config_lines) + "\n"
+        target_file = "/etc/dnsmasq.d/local.conf"
+
+        self.terminal._log(f"💾 Écriture de {target_file}...")
+        
+        def _thread():
+            try:
+                # Utilisation de sudo tee pour gérer les permissions automatiquement
+                proc = subprocess.run(
+                    ["sudo", "tee", target_file], 
+                    input=final_content, 
+                    text=True, 
+                    capture_output=True
+                )
+                if proc.returncode == 0:
+                    GLib.idle_add(lambda: self.show_toast("✅ Config Dnsmasq sauvegardée"))
+                    GLib.idle_add(lambda: self.terminal._log("✅ Fichier écrit avec succès"))
+                else:
+                    GLib.idle_add(lambda: self.show_toast("❌ Échec écriture (Sudo ?)"))
+            except Exception as e:
+                GLib.idle_add(lambda: self.terminal._log(f"❌ Erreur: {e}"))
+        
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _apply_dns(self, *_):
+        """Applique les DNS dans resolv.conf avec sudo"""
+        new_dns = self.entry_new_dns.get_text().strip()
+        if not new_dns: return self.show_toast("❌ DNS requis")
+        
+        dns_list = re.split(r'[,\s]+', new_dns)
+        nameservers = "\n".join([f"nameserver {ip.strip()}" for ip in dns_list if ip.strip()])
+        
+        script = f"""
+echo '# Généré par Gykhamine Studio' | sudo tee /etc/resolv.conf > /dev/null
+echo '{nameservers}' | sudo tee -a /etc/resolv.conf > /dev/null
+chmod 644 /etc/resolv.conf
+"""
+        self._run_system_script(script, "Application DNS")
+
+    def _restore_dns_dhcp(self, *_):
+        """Restaure la config DNS via DHCP"""
+        script = "sudo rm -f /etc/resolv.conf && sudo systemctl restart NetworkManager"
+        self._run_system_script(script, "Restauration DNS DHCP")
+
+    def _read_current_dns(self):
+        """Lit le resolv.conf actuel"""
+        try:
+            with open("/etc/resolv.conf", "r") as f:
+                self.txt_current_dns.get_buffer().set_text(f.read())
+        except Exception as e:
+            self.txt_current_dns.get_buffer().set_text(f"Erreur: {e}")
+    # --- Méthodes de Gestion des Permissions et Services ---
+
+    def _control_dnsmasq(self, action):
+        """Gère le démarrage/arrêt/redémarrage avec sudo"""
+        self.terminal._log(f"▶ Dnsmasq : {action}...")
+        def _thread():
+            try:
+                proc = subprocess.run(["sudo", "systemctl", action, "dnsmasq"], capture_output=True, text=True)
+                if proc.returncode == 0:
+                    GLib.idle_add(lambda: self.show_toast(f"✅ Dnsmasq {action}é"))
+                    GLib.idle_add(self._check_dnsmasq_status)
+                else:
+                    GLib.idle_add(lambda: self.terminal._log(f"❌ Erreur: {proc.stderr}"))
+            except Exception as e:
+                GLib.idle_add(lambda: self.terminal._log(f"❌ Exception: {e}"))
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _check_dnsmasq_status(self):
+        """Vérifie l'état du service pour l'affichage"""
+        try:
+            proc = subprocess.run(["systemctl", "is-active", "dnsmasq"], capture_output=True, text=True)
+            status = proc.stdout.strip()
+            if status == "active":
+                self.lbl_dnsmasq_status.set_text("Statut: 🟢 Actif")
+                self.lbl_dnsmasq_status.remove_css_class("dim-label")
+            else:
+                self.lbl_dnsmasq_status.set_text("Statut: 🔴 Inactif")
+                self.lbl_dnsmasq_status.add_css_class("dim-label")
+        except:
+            pass
+
+    def _save_dnsmasq_from_form(self, *_):
+        """Génère le fichier /etc/dnsmasq.d/local.conf depuis le formulaire"""
+        upstream = self.entry_upstream_dns.get_text().strip()
+        local_addr = self.entry_local_addr.get_text().strip()
+        blocked = self.entry_blocked.get_text().strip()
+        interface = self.entry_interface.get_text().strip()
+
+        config_lines = ["# Généré par Gykhamine Studio - Formulaire DNS"]
+        
+        if interface:
+            for iface in interface.split(','):
+                config_lines.append(f"interface={iface.strip()}")
+            config_lines.append("bind-interfaces")
+        
+        if upstream:
+            for dns in re.split(r'[,\s]+', upstream):
+                if dns: config_lines.append(f"server={dns}")
+
+        if local_addr and '->' in local_addr:
+            # Support simple pour une entrée, peut être étendu pour plusieurs lignes si Entry devient TextView
+            parts = local_addr.split('->')
+            if len(parts) == 2:
+                config_lines.append(f"address=/{parts[0].strip()}/{parts[1].strip()}")
+
+        if blocked:
+            for domain in re.split(r'[,\s]+', blocked):
+                if domain: config_lines.append(f"address=/{domain}/0.0.0.0")
+
+        final_content = "\n".join(config_lines) + "\n"
+        target_file = "/etc/dnsmasq.d/local.conf"
+
+        self.terminal._log(f"💾 Écriture de {target_file}...")
+        
+        def _thread():
+            try:
+                # Utilisation de sudo tee pour gérer les permissions automatiquement
+                proc = subprocess.run(
+                    ["sudo", "tee", target_file], 
+                    input=final_content, 
+                    text=True, 
+                    capture_output=True
+                )
+                if proc.returncode == 0:
+                    GLib.idle_add(lambda: self.show_toast("✅ Config Dnsmasq sauvegardée"))
+                    GLib.idle_add(lambda: self.terminal._log("✅ Fichier écrit avec succès"))
+                else:
+                    GLib.idle_add(lambda: self.show_toast("❌ Échec écriture (Sudo ?)"))
+            except Exception as e:
+                GLib.idle_add(lambda: self.terminal._log(f"❌ Erreur: {e}"))
+        
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _apply_dns(self, *_):
+        """Applique les DNS dans resolv.conf avec sudo"""
+        new_dns = self.entry_new_dns.get_text().strip()
+        if not new_dns: return self.show_toast("❌ DNS requis")
+        
+        dns_list = re.split(r'[,\s]+', new_dns)
+        nameservers = "\n".join([f"nameserver {ip.strip()}" for ip in dns_list if ip.strip()])
+        
+        script = f"""
+echo '# Généré par Gykhamine Studio' | sudo tee /etc/resolv.conf > /dev/null
+echo '{nameservers}' | sudo tee -a /etc/resolv.conf > /dev/null
+chmod 644 /etc/resolv.conf
+"""
+        self._run_system_script(script, "Application DNS")
+
+    def _restore_dns_dhcp(self, *_):
+        """Restaure la config DNS via DHCP"""
+        script = "sudo rm -f /etc/resolv.conf && sudo systemctl restart NetworkManager"
+        self._run_system_script(script, "Restauration DNS DHCP")
+
+    def _read_current_dns(self):
+        """Lit le resolv.conf actuel"""
+        try:
+            with open("/etc/resolv.conf", "r") as f:
+                self.txt_current_dns.get_buffer().set_text(f.read())
+        except Exception as e:
+            self.txt_current_dns.get_buffer().set_text(f"Erreur: {e}")
+    # --- Méthodes de Gestion des Permissions et Services ---
+
+    def _control_dnsmasq(self, action):
+        """Gère le démarrage/arrêt/redémarrage avec sudo"""
+        self.terminal._log(f"▶ Dnsmasq : {action}...")
+        def _thread():
+            try:
+                proc = subprocess.run(["sudo", "systemctl", action, "dnsmasq"], capture_output=True, text=True)
+                if proc.returncode == 0:
+                    GLib.idle_add(lambda: self.show_toast(f"✅ Dnsmasq {action}é"))
+                    GLib.idle_add(self._check_dnsmasq_status)
+                else:
+                    GLib.idle_add(lambda: self.terminal._log(f"❌ Erreur: {proc.stderr}"))
+            except Exception as e:
+                GLib.idle_add(lambda: self.terminal._log(f"❌ Exception: {e}"))
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _check_dnsmasq_status(self):
+        """Vérifie l'état du service pour l'affichage"""
+        try:
+            proc = subprocess.run(["systemctl", "is-active", "dnsmasq"], capture_output=True, text=True)
+            status = proc.stdout.strip()
+            if status == "active":
+                self.lbl_dnsmasq_status.set_text("Statut: 🟢 Actif")
+                self.lbl_dnsmasq_status.remove_css_class("dim-label")
+            else:
+                self.lbl_dnsmasq_status.set_text("Statut: 🔴 Inactif")
+                self.lbl_dnsmasq_status.add_css_class("dim-label")
+        except:
+            pass
+
+    def _save_dnsmasq_from_form(self, *_):
+        """Génère le fichier /etc/dnsmasq.d/local.conf depuis le formulaire"""
+        upstream = self.entry_upstream_dns.get_text().strip()
+        local_addr = self.entry_local_addr.get_text().strip()
+        blocked = self.entry_blocked.get_text().strip()
+        interface = self.entry_interface.get_text().strip()
+
+        config_lines = ["# Généré par Gykhamine Studio - Formulaire DNS"]
+        
+        if interface:
+            for iface in interface.split(','):
+                config_lines.append(f"interface={iface.strip()}")
+            config_lines.append("bind-interfaces")
+        
+        if upstream:
+            for dns in re.split(r'[,\s]+', upstream):
+                if dns: config_lines.append(f"server={dns}")
+
+        if local_addr and '->' in local_addr:
+            # Support simple pour une entrée, peut être étendu pour plusieurs lignes si Entry devient TextView
+            parts = local_addr.split('->')
+            if len(parts) == 2:
+                config_lines.append(f"address=/{parts[0].strip()}/{parts[1].strip()}")
+
+        if blocked:
+            for domain in re.split(r'[,\s]+', blocked):
+                if domain: config_lines.append(f"address=/{domain}/0.0.0.0")
+
+        final_content = "\n".join(config_lines) + "\n"
+        target_file = "/etc/dnsmasq.d/local.conf"
+
+        self.terminal._log(f"💾 Écriture de {target_file}...")
+        
+        def _thread():
+            try:
+                # Utilisation de sudo tee pour gérer les permissions automatiquement
+                proc = subprocess.run(
+                    ["sudo", "tee", target_file], 
+                    input=final_content, 
+                    text=True, 
+                    capture_output=True
+                )
+                if proc.returncode == 0:
+                    GLib.idle_add(lambda: self.show_toast("✅ Config Dnsmasq sauvegardée"))
+                    GLib.idle_add(lambda: self.terminal._log("✅ Fichier écrit avec succès"))
+                else:
+                    GLib.idle_add(lambda: self.show_toast("❌ Échec écriture (Sudo ?)"))
+            except Exception as e:
+                GLib.idle_add(lambda: self.terminal._log(f"❌ Erreur: {e}"))
+        
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _apply_dns(self, *_):
+        """Applique les DNS dans resolv.conf avec sudo"""
+        new_dns = self.entry_new_dns.get_text().strip()
+        if not new_dns: return self.show_toast("❌ DNS requis")
+        
+        dns_list = re.split(r'[,\s]+', new_dns)
+        nameservers = "\n".join([f"nameserver {ip.strip()}" for ip in dns_list if ip.strip()])
+        
+        script = f"""
+echo '# Généré par Gykhamine Studio' | sudo tee /etc/resolv.conf > /dev/null
+echo '{nameservers}' | sudo tee -a /etc/resolv.conf > /dev/null
+chmod 644 /etc/resolv.conf
+"""
+        self._run_system_script(script, "Application DNS")
+
+    def _restore_dns_dhcp(self, *_):
+        """Restaure la config DNS via DHCP"""
+        script = "sudo rm -f /etc/resolv.conf && sudo systemctl restart NetworkManager"
+        self._run_system_script(script, "Restauration DNS DHCP")
+
+    def _read_current_dns(self):
+        """Lit le resolv.conf actuel"""
+        try:
+            with open("/etc/resolv.conf", "r") as f:
+                self.txt_current_dns.get_buffer().set_text(f.read())
+        except Exception as e:
+            self.txt_current_dns.get_buffer().set_text(f"Erreur: {e}")
+    def _save_dnsmasq_from_form(self, *_):
+        """Génère le fichier de configuration Dnsmasq à partir des champs du formulaire"""
+        upstream = self.entry_upstream_dns.get_text().strip()
+        local_addr = self.entry_local_addr.get_text().strip()
+        blocked = self.entry_blocked.get_text().strip()
+        interface = self.entry_interface.get_text().strip()
+
+        config_lines = [
+            "# Configuration générée automatiquement par Gykhamine Studio",
+            f"# Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            ""
+        ]
+
+        # Gestion des interfaces
+        if interface:
+            config_lines.append(f"interface={interface}")
+            config_lines.append("bind-interfaces")
+        
+        # Gestion des DNS amont
+        if upstream:
+            servers = re.split(r'[,\n]+', upstream)
+            for s in servers:
+                s = s.strip()
+                if s:
+                    config_lines.append(f"server={s}")
+
+        # Gestion des adresses locales (Static DHCP/DNS)
+        if local_addr:
+            entries = re.split(r'[\n]+', local_addr)
+            for entry in entries:
+                if '->' in entry:
+                    parts = entry.split('->')
+                    domain = parts[0].strip()
+                    ip = parts[1].strip()
+                    config_lines.append(f"address=/{domain}/{ip}")
+
+        # Gestion du blocage (Redirection vers 0.0.0.0)
+        if blocked:
+            domains = re.split(r'[,\n]+', blocked)
+            for d in domains:
+                d = d.strip()
+                if d:
+                    config_lines.append(f"address=/{d}/0.0.0.0")
+
+        final_content = "\n".join(config_lines) + "\n"
+        target_file = "/etc/dnsmasq.d/local.conf"
+
+        self.terminal._log(f"💾 Génération de la configuration pour {target_file}...")
+        
+        def _thread():
+            try:
+                # Utilisation de sudo tee pour écrire le fichier protégé
+                proc = subprocess.run(
+                    ["sudo", "tee", target_file], 
+                    input=final_content, 
+                    text=True, 
+                    capture_output=True
+                )
+                
+                if proc.returncode == 0:
+                    GLib.idle_add(lambda: self.terminal._log(f"✅ Configuration sauvegardée avec succès."))
+                    GLib.idle_add(lambda: self.show_toast("✅ Configuration Dnsmasq appliquée"))
+                else:
+                    GLib.idle_add(lambda: self.terminal._log(f"❌ Erreur d'écriture : {proc.stderr}"))
+                    GLib.idle_add(lambda: self.show_toast("❌ Échec de la sauvegarde (Vérifiez le mot de passe sudo)"))
+                    
+            except Exception as e:
+                GLib.idle_add(lambda: self.terminal._log(f"❌ Exception : {e}"))
+        
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _apply_dns(self, *_):
+        """Applique les nouveaux serveurs DNS dans /etc/resolv.conf"""
+        new_dns = self.entry_new_dns.get_text().strip()
+        if not new_dns: return self.show_toast("❌ DNS requis")
+        
+        dns_list = re.split(r'[,\s]+', new_dns)
+        nameservers = "\n".join([f"nameserver {ip.strip()}" for ip in dns_list if ip.strip()])
+        
+        script = f"""
+# Sauvegarde automatique
+cp /etc/resolv.conf /etc/resolv.conf.bak.$(date +%s)
+# Écriture sécurisée via sudo tee
+echo '# Généré par Gykhamine Studio' | sudo tee /etc/resolv.conf > /dev/null
+echo '{nameservers}' | sudo tee -a /etc/resolv.conf > /dev/null
+chmod 644 /etc/resolv.conf
+"""
+        self._run_system_script(script, "Application DNS Manuelle")
+
+    def _restore_dns_dhcp(self, *_):
+        script = """
+rm -f /etc/resolv.conf
+# Relance NetworkManager pour régénérer le fichier via DHCP
+systemctl restart NetworkManager
+"""
+        self._run_system_script(script, "Restauration DNS via DHCP")
+
+    def _control_dnsmasq(self, action):
+        self.terminal._log(f"▶ Service Dnsmasq : {action}...")
+        def _thread():
+            try:
+                proc = subprocess.run(["sudo", "systemctl", action, "dnsmasq"], capture_output=True, text=True)
+                if proc.returncode == 0:
+                    GLib.idle_add(lambda: self.show_toast(f"✅ Dnsmasq {action}é"))
+                    GLib.idle_add(self._check_dnsmasq_status)
+                else:
+                    GLib.idle_add(lambda: self.terminal._log(f"❌ Erreur systemctl: {proc.stderr}"))
+                    GLib.idle_add(lambda: self.show_toast(f"❌ Échec Dnsmasq {action}"))
+            except Exception as e:
+                GLib.idle_add(lambda: self.terminal._log(f"❌ Exception: {e}"))
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _check_dnsmasq_status(self):
+        try:
+            proc = subprocess.run(["systemctl", "is-active", "dnsmasq"], capture_output=True, text=True)
+            status = proc.stdout.strip()
+            if status == "active":
+                self.lbl_dnsmasq_status.set_text("Statut Service: 🟢 Actif")
+                self.lbl_dnsmasq_status.remove_css_class("dim-label")
+            else:
+                self.lbl_dnsmasq_status.set_text("Statut Service: 🔴 Inactif")
+                self.lbl_dnsmasq_status.add_css_class("dim-label")
+        except:
+            pass
+            
+    def _read_current_dns(self):
+        try:
+            with open("/etc/resolv.conf", "r") as f:
+                self.txt_current_dns.get_buffer().set_text(f.read())
+        except Exception as e:
+            self.txt_current_dns.get_buffer().set_text(f"Erreur lecture: {e}")
+    def _control_dnsmasq(self, action):
+        conf_extra = self.entry_dns_conf_extra.get_text().strip()
+        script = ""
+        
+        if action == "start":
+            # Création d'un fichier de config temporaire si besoin
+            if conf_extra:
+                script += f"echo '{conf_extra}' > /tmp/gykhamine_dnsmasq.conf && "
+            
+            script += "sudo systemctl start dnsmasq"
+            self.terminal._log(f"▶ Démarrage de Dnsmasq...")
+        else:
+            script = "sudo systemctl stop dnsmasq"
+            self.terminal._log(f"▶ Arrêt de Dnsmasq...")
+            
+        def _thread():
+            try:
+                proc = subprocess.run(script, shell=True, capture_output=True, text=True)
+                if proc.returncode == 0:
+                    GLib.idle_add(lambda: self.show_toast(f"✅ Dnsmasq {action}é"))
+                    GLib.idle_add(self._check_dnsmasq_status)
+                else:
+                    GLib.idle_add(lambda: self.terminal._log(f"❌ Erreur: {proc.stderr}"))
+                    GLib.idle_add(lambda: self.show_toast(f"❌ Échec Dnsmasq"))
+            except Exception as e:
+                GLib.idle_add(lambda: self.terminal._log(f"❌ Exception: {e}"))
+                
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _check_dnsmasq_status(self):
+        try:
+            proc = subprocess.run(["systemctl", "is-active", "dnsmasq"], capture_output=True, text=True)
+            status = proc.stdout.strip()
+            if status == "active":
+                self.lbl_dnsmasq_status.set_text("🟢 Actif")
+                self.lbl_dnsmasq_status.remove_css_class("dim-label")
+            else:
+                self.lbl_dnsmasq_status.set_text("🔴 Inactif")
+                self.lbl_dnsmasq_status.add_css_class("dim-label")
+        except:
+            pass
     def _read_current_dns(self):
         try:
             with open("/etc/resolv.conf", "r") as f: 
@@ -3981,42 +4571,77 @@ chmod 700 /run/tor
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         set_margins(box, 16)
         
-        # Barre de recherche et config
+        # --- Section 1: Recherche et Installation (Existant) ---
         search_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.entry_dnf_search = Gtk.Entry(); self.entry_dnf_search.set_placeholder_text("Rechercher paquet..."); self.entry_dnf_search.set_hexpand(True)
         self.entry_dnf_search.connect("activate", lambda *_: self._search_dnf())
-        
         btn_search = Gtk.Button(label="🔍 Chercher"); btn_search.connect("clicked", lambda *_: self._search_dnf())
-        
-        # Sélection du Repo (Préparation UI)
-        self.combo_repo = Gtk.ComboBoxText()
-        self.combo_repo.append_text("Tous les dépôts")
-        self.combo_repo.set_active(0)
-        
-        search_box.append(self.entry_dnf_search); search_box.append(self.combo_repo); search_box.append(btn_search)
+        search_box.append(self.entry_dnf_search); search_box.append(btn_search)
         box.append(search_box)
         
-        # Options de téléchargement
-        options_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        options_box.append(Gtk.Label(label="Destination:", xalign=0))
-        self.entry_dnf_dest = Gtk.Entry()
-        self.entry_dnf_dest.set_text(str(Path.home() / "Downloads"))
-        self.entry_dnf_dest.set_hexpand(True)
-        btn_browse_dest = Gtk.Button(label="📂"); btn_browse_dest.connect("clicked", lambda *_: self._browse_folder("Choisir dossier téléchargement", self.entry_dnf_dest))
-        options_box.append(self.entry_dnf_dest); options_box.append(btn_browse_dest)
-        box.append(options_box)
-        
-        # Liste des résultats
-        scroll = Gtk.ScrolledWindow(); scroll.set_vexpand(True)
+        scroll_pkgs = Gtk.ScrolledWindow(); scroll_pkgs.set_vexpand(True); scroll_pkgs.set_size_request(-1, 200)
         self.listbox_dnf = Gtk.ListBox(); self.listbox_dnf.set_selection_mode(Gtk.SelectionMode.NONE)
-        scroll.set_child(self.listbox_dnf)
-        box.append(scroll)
+        scroll_pkgs.set_child(self.listbox_dnf)
+        box.append(scroll_pkgs)
         
-        self.lbl_dnf_status = Gtk.Label(label="Prêt", xalign=0, css_classes=["dim-label"])
-        box.append(self.lbl_dnf_status)
+        box.append(Gtk.Separator(margin_top=10, margin_bottom=10))
+
+        # --- Section 2: Configuration du Chemin des Dépôts (Nouveau) ---
+        box.append(Gtk.Label(label="📂 Chemin des Dépôts (Repos)", xalign=0, css_classes=["heading"]))
+        grid_path = Gtk.Grid(); grid_path.set_column_spacing(10); grid_path.set_row_spacing(10)
+        
+        row = 0
+        grid_path.attach(Gtk.Label(label="Répertoire .repo alternatif:", xalign=0), 0, row, 1, 1)
+        self.entry_repo_dir = Gtk.Entry()
+        # Par défaut, on utilise le standard, mais l'utilisateur peut changer vers /run/media/...
+        self.entry_repo_dir.set_text("/etc/yum.repos.d") 
+        self.entry_repo_dir.set_hexpand(True)
+        grid_path.attach(self.entry_repo_dir, 1, row, 1, 1)
+        
+        btn_browse_repo = Gtk.Button(label="📂 Parcourir")
+        btn_browse_repo.connect("clicked", lambda *_: self._browse_folder("Choisir dossier repos", self.entry_repo_dir))
+        grid_path.attach(btn_browse_repo, 2, row, 1, 1)
+        row += 1
+        
+        info_lbl = Gtk.Label(label="Note: Changer ce chemin nécessite de redémarrer DNF ou d'utiliser '--repofrompath' pour les commandes ponctuelles.", css_classes=["dim-label"], xalign=0, wrap=True)
+        grid_path.attach(info_lbl, 1, row, 2, 1)
+        
+        box.append(grid_path)
+        
+        box.append(Gtk.Separator(margin_top=10, margin_bottom=10))
+
+        # --- Section 3: Gestion des Dépôts (Liste) ---
+        btn_list_repos = Gtk.Button(label="📋 Lister les Repos Actifs")
+        btn_list_repos.connect("clicked", self._list_active_repos)
+        box.append(btn_list_repos)
+        
+        # Zone de log pour les repos
+        scroll_repo_log = Gtk.ScrolledWindow(); scroll_repo_log.set_size_request(-1, 150)
+        self.txt_repo_log = Gtk.TextView(); self.txt_repo_log.set_editable(False); self.txt_repo_log.set_monospace(True)
+        scroll_repo_log.set_child(self.txt_repo_log)
+        box.append(scroll_repo_log)
         
         return box
 
+    def _list_active_repos(self, *_):
+        repo_dir = self.entry_repo_dir.get_text().strip()
+        self.terminal._log(f"▶ Liste des dépôts depuis: {repo_dir}...")
+        
+        def _thread():
+            try:
+                # Si le chemin est différent de /etc/yum.repos.d, on utilise --repofrompath ou on liste les fichiers manuellement
+                if repo_dir != "/etc/yum.repos.d":
+                    # Pour une utilisation avancée, on pourrait lister les fichiers .repo dans ce dossier
+                    import os
+                    files = [f for f in os.listdir(repo_dir) if f.endswith('.repo')] if os.path.isdir(repo_dir) else []
+                    GLib.idle_add(lambda: self.txt_repo_log.get_buffer().set_text(f"Dépôts trouvés dans {repo_dir}:\n" + "\n".join(files)))
+                else:
+                    proc = subprocess.run(["dnf", "repolist", "enabled"], capture_output=True, text=True)
+                    GLib.idle_add(lambda: self.txt_repo_log.get_buffer().set_text(proc.stdout))
+            except Exception as e:
+                GLib.idle_add(lambda: self.txt_repo_log.get_buffer().set_text(f"Erreur: {e}"))
+                
+        threading.Thread(target=_thread, daemon=True).start()
     def _search_dnf(self):
         query = self.entry_dnf_search.get_text().strip()
         if not query: return
@@ -8182,6 +8807,9 @@ class GykhamineStudioApp(Adw.Application):
         
         self.content_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self.content_paned.set_shrink_start_child(False); self.content_paned.set_shrink_end_child(False); self.content_paned.set_resize_start_child(True); self.content_paned.set_resize_end_child(False)
+        
+        # Enregistrement du logger global vers le terminal panel
+        register_logger(lambda msg: self.terminal_panel._log(msg))
         
         self.ai_engine = BlockAIEngine(
             config_getter=lambda: self.config,
