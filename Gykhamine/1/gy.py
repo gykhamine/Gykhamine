@@ -3084,7 +3084,7 @@ class ControlPanel(Gtk.Box):
         
         sep_tools = Gtk.Separator(); sep_tools.set_margin_top(8); sep_tools.set_margin_bottom(4); self.append(sep_tools)
         lbl_tools = Gtk.Label(label="🛠️ Outils DevOps & IA"); lbl_tools.add_css_class("control-section-title"); lbl_tools.set_xalign(0); self.append(lbl_tools)
-        tools_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        tools_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         tools_box.set_hexpand(True)
         btn_git = Gtk.Button(label="🐙 Mini GitHub Desktop")
         btn_git.add_css_class("ctrl-btn")
