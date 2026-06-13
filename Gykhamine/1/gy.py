@@ -108,14 +108,9 @@ def install_desktop_files_startup():
 
 # Exécution immédiate au lancement du script
 install_desktop_files_startup()
-
-# ═══════════════════════════════════════════════════════════════════════
-#  MONTAGE AUTOMATIQUE DE LA PARTITION GY (SUDO)
-# ═══════════════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════════════
 #  MONTAGE AUTOMATIQUE DE LA PARTITION GY VIA SON UUID (SUDO)
 # ═══════════════════════════════════════════════════════════════════════
-
 # ═══════════════════════════════════════════════════════════════════════
 #  HELPER : LECTURE .ENV EXTERNE (Simple & Robuste)
 # ═══════════════════════════════════════════════════════════════════════
@@ -700,247 +695,129 @@ def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
 
 def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
     """
-    Parseur de templates HTML/Jinja avec découpage hiérarchique profond.
-    Détecte les blocs Django, les structures HTML et les logiques conditionnelles imbriquées.
-    CORRECTION : Analyse le HTML hors {% block %} avec une gestion logique des fermetures de balises (Stack).
+    Parseur HTML/Jinja RADICAL :
+    - Ignore TOUTES les balises HTML structurelles (div, section, etc.).
+    - Ne découpe QUE sur les blocs logiques (Django/Jinja) et les scripts/styles.
+    - Retourne le fichier complet si aucun bloc logique n'est trouvé.
+    - Sans récursion.
     """
     lines = code.splitlines(keepends=True)
     blocks = []
     
-    # 1. Détection des blocs spéciaux racine (Style, Script, Django Block)
-    i = 0
-    special_blocks_indices = set()
-    django_blocks_found = []
+    # Indices des lignes déjà attribuées à un bloc spécial
+    used_lines = set()
     
+    i = 0
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
-        start_idx = i
         
-        # Django Block Root
-        m = re.match(r"\{%-?\s*block\s+(\w+).*?%\}", stripped, re.IGNORECASE)
-        if m:
-            end_idx = i
-            for k in range(i+1, len(lines)):
+        if not stripped:
+            i += 1
+            continue
+            
+        start_idx = i
+        end_idx = i
+        block_type = None
+        block_name = "Bloc"
+        
+        # 1. Détection Bloc Django/Jinja Root ({% block ... %})
+        m_block = re.match(r"\{%-?\s*block\s+(\w+).*?%\}", stripped, re.IGNORECASE)
+        if m_block:
+            block_type = "django_block"
+            block_name = f"block: {m_block.group(1)}"
+            # Chercher {% endblock %}
+            for k in range(i + 1, len(lines)):
                 if re.match(r"\{%-?\s*endblock\b", lines[k].strip(), re.IGNORECASE):
                     end_idx = k
                     break
-            raw = "".join(lines[start_idx:end_idx+1])
-            block_data = {
-                "type": "django_block",
-                "name": f"block: {m.group(1)}",
-                "code": raw,
+            else:
+                end_idx = len(lines) - 1 # Fermeture implicite à la fin
+        
+        # 2. Détection Style
+        elif re.match(r"<style(\s[^>]*)?>", stripped, re.IGNORECASE):
+            block_type = "style"
+            block_name = "<style>"
+            for k in range(i + 1, len(lines)):
+                if re.match(r"</style\s*>", lines[k].strip(), re.IGNORECASE):
+                    end_idx = k
+                    break
+            else:
+                end_idx = len(lines) - 1
+
+        # 3. Détection Script
+        elif re.match(r"<script(\s[^>]*)?>", stripped, re.IGNORECASE):
+            block_type = "script"
+            block_name = "<script>"
+            for k in range(i + 1, len(lines)):
+                if re.match(r"</script\s*>", lines[k].strip(), re.IGNORECASE):
+                    end_idx = k
+                    break
+            else:
+                end_idx = len(lines) - 1
+        
+        # Si un bloc spécial a été détecté
+        if block_type:
+            raw_code = "".join(lines[start_idx:end_idx + 1])
+            blocks.append({
+                "type": block_type,
+                "name": block_name,
+                "code": raw_code,
                 "start": start_idx,
                 "end": end_idx,
                 "children": []
-            }
-            django_blocks_found.append((start_idx, end_idx, block_data))
-            for x in range(start_idx, end_idx+1): special_blocks_indices.add(x)
+            })
+            # Marquer les lignes comme utilisées
+            for x in range(start_idx, end_idx + 1):
+                used_lines.add(x)
             i = end_idx + 1
             continue
             
-        # Style/Script Blocks
-        if re.match(r"<style(\s[^>]*)?>$", stripped, re.IGNORECASE):
-            end_idx = i
-            for k in range(i+1, len(lines)):
-                if re.match(r"</style\s*>", lines[k].strip(), re.IGNORECASE): end_idx = k; break
-            raw = "".join(lines[start_idx:end_idx+1])
-            blocks.append({"type": "style", "name": "CSS Block (<style>)", "code": raw, "start": start_idx, "end": end_idx, "children": []})
-            for x in range(start_idx, end_idx+1): special_blocks_indices.add(x)
-            i = end_idx + 1; continue
-            
-        if re.match(r"<script(\s[^>]*)?>$", stripped, re.IGNORECASE):
-            end_idx = i
-            for k in range(i+1, len(lines)):
-                if re.match(r"</script\s*>", lines[k].strip(), re.IGNORECASE): end_idx = k; break
-            raw = "".join(lines[start_idx:end_idx+1])
-            blocks.append({"type": "script", "name": "JS Block (<script>)", "code": raw, "start": start_idx, "end": end_idx, "children": []})
-            for x in range(start_idx, end_idx+1): special_blocks_indices.add(x)
-            i = end_idx + 1; continue
-            
         i += 1
 
-    # 2. Fonction Récursive pour parser le contenu HTML/Jinja en profondeur
-    def _recursive_parse(content_lines, start_offset=0, depth=0):
-        local_blocks = []
-        j = 0
-        # Balises structurelles élargies pour une meilleure couverture
-        structural_tags = {
-            "div", "section", "article", "header", "footer", "nav", "main", "aside", 
-            "form", "table", "ul", "ol", "li", "tr", "td", "th", "p", "span", "a",
-            "h1", "h2", "h3", "h4", "h5", "h6", "tbody", "thead", "tfoot"
-        }
-        void_tags = {"img", "input", "br", "hr", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
-        
-        while j < len(content_lines):
-            line = content_lines[j]
-            stripped = line.strip()
-            if not stripped:
-                j += 1
-                continue
-                
-            # Dans la fonction _recursive_parse de _parse_template_blocks, remplacez la section "A. Détection des Conditions Jinja" par :
+    # SI AUCUN BLOC LOGIQUE N'A ÉTÉ TROUVÉ : Retourner le fichier entier
+    if not blocks:
+        return [{
+            "type": "html_file",
+            "name": Path(file_path).name if file_path else "template.html",
+            "code": code,
+            "start": 0,
+            "end": len(lines) - 1,
+            "children": []
+        }]
 
-            # A. Détection des Conditions Jinja {% if ... %}, {% elif ... %}, {% else %} ou {% for ... %}
-            if re.match(r"\{%-?\s*(if|elif|else|for|with)\s+", stripped, re.IGNORECASE):
-                start_block = j
-                depth_logic = 1
-                end_block = j
-                k = j + 1
-                while k < len(content_lines):
-                    next_line = content_lines[k].strip()
-                    # On incrémente seulement sur de NOUVEAUX blocs if/for/with imbriqués
-                    if re.match(r"\{%-?\s*(if|for|with)\s+", next_line, re.IGNORECASE): 
-                        depth_logic += 1
-                    # On décrémente uniquement sur les fermetures
-                    if re.match(r"\{%-?\s*end(if|for|with)\b", next_line, re.IGNORECASE): 
-                        depth_logic -= 1
-                        
-                    if depth_logic <= 0:
-                        end_block = k
-                        break
-                    k += 1
-                    
-                raw_code = "".join(content_lines[start_block:end_block+1])
-                
-                # Extraction propre du nom pour l'affichage
-                name_match = re.search(r"(if|elif|else|for|with)\s+(.+?)\s*%\}", stripped, re.IGNORECASE)
-                if name_match:
-                    block_name = f"Logic: {name_match.group(1).upper()} ({name_match.group(2).strip()[:30]})"
-                else:
-                    block_name = "Logic Block (if/else/for)"
-                    
-                inner_lines = content_lines[start_block+1 : end_block]
-                children = _recursive_parse(inner_lines, start_offset + start_block + 1, depth + 1)
-                
-                local_blocks.append({
-                    "type": "jinja_logic",
-                    "name": block_name,
-                    "code": raw_code,
-                    "start": start_offset + start_block,
-                    "end": start_offset + end_block,
-                    "children": children,
-                    "tag": "logic"
-                })
-                j = end_block + 1
-                continue
-            # B. Détection des Balises HTML Structurantes
-            open_match = re.match(r"<([a-zA-Z0-9]+)(\s[^>]*)?>", stripped)
-            if open_match:
-                tag = open_match.group(1).lower()
-                if tag in structural_tags and tag not in void_tags:
-                    name = f"<{tag}>"
-                    attrs = open_match.group(2) or ""
-                    id_m = re.search(r'id=["\']([^"\']+)["\']', attrs)
-                    class_m = re.search(r'class=["\']([^"\']+)["\']', attrs)
-                    
-                    if id_m: name = f"#{id_m.group(1)}"
-                    elif class_m:
-                        first_class = class_m.group(1).split()[0]
-                        name = f".{first_class}"
-                    
-                    start_block = j
-                    tag_stack = []
-                    
-                    # Nettoyage des commentaires HTML pour éviter les faux positifs dans le comptage
-                    clean_stripped = re.sub(r'<!--.*?-->', '', stripped, flags=re.DOTALL)
-                    
-                    # Regex robuste : <tag suivi d'un espace, > ou fin de chaîne (évite </tag> ou <tagname>)
-                    line_opens = len(re.findall(rf"<{tag}(?:\s|>|$)", clean_stripped, re.IGNORECASE))
-                    line_closes = len(re.findall(rf"</{tag}\s*>", clean_stripped, re.IGNORECASE))
-                    
-                    for _ in range(line_opens): tag_stack.append(j)
-                    for _ in range(line_closes): 
-                        if tag_stack: tag_stack.pop()
-                    
-                    end_block = j
-                    k = j + 1
-                    while k < len(content_lines):
-                        next_line = content_lines[k]
-                        next_stripped = next_line.strip()
-                        
-                        if not next_stripped:
-                            k += 1
-                            continue
-                            
-                        next_clean = re.sub(r'<!--.*?-->', '', next_stripped, flags=re.DOTALL)
-                        
-                        opens = len(re.findall(rf"<{tag}(?:\s|>|$)", next_clean, re.IGNORECASE))
-                        closes = len(re.findall(rf"</{tag}\s*>", next_clean, re.IGNORECASE))
-                        
-                        for _ in range(opens): tag_stack.append(k)
-                        for _ in range(closes):
-                            if tag_stack: tag_stack.pop()
-                            
-                        # Dès que la pile est vide, on a trouvé la fermeture logique correspondante
-                        if not tag_stack:
-                            end_block = k
-                            break
-                        k += 1
-                    
-                    # Sécurité : si la balise n'est jamais fermée, on la ferme à la fin du segment
-                    if tag_stack: 
-                        end_block = len(content_lines) - 1
-                    
-                    raw_code = "".join(content_lines[start_block:end_block+1])
-                    inner_lines = content_lines[start_block+1 : end_block]
-                    children = _recursive_parse(inner_lines, start_offset + start_block + 1, depth + 1)
-                    
-                    local_blocks.append({
-                        "type": "html_tag",
-                        "name": name,
-                        "code": raw_code,
-                        "start": start_offset + start_block,
-                        "end": start_offset + end_block,
-                        "children": children,
-                        "tag": tag
-                    })
-                    j = end_block + 1
-                    continue
-            j += 1
-        return local_blocks
-
-    # 3. Assemblage final
-    final_blocks = []
-    
-    # Traiter les blocs Django trouvés
-    for start_idx, end_idx, b_data in django_blocks_found:
-        content_lines = b_data["code"].splitlines(keepends=True)[1:-1] # Enlever les tags block/endblock
-        if content_lines:
-            children = _recursive_parse(content_lines, b_data["start"] + 1, 1)
-            b_data["children"] = children
-        final_blocks.append(b_data)
-
-    # Traiter le HTML "Orphelin" (hors des blocs Django et Style/Script)
-    orphan_lines = []
-    current_orphan_start = None
-    
+    # Optionnel : Si vous voulez aussi récupérer le HTML "orphelin" entre les blocs django
+    # comme un bloc "Autre", décommentez ci-dessous. Sinon, seul le fichier complet ou les blocs logiques sont retournés.
+    """
+    orphan_start = None
     for idx in range(len(lines)):
-        if idx not in special_blocks_indices:
-            if current_orphan_start is None:
-                current_orphan_start = idx
+        if idx not in used_lines:
+            if orphan_start is None: orphan_start = idx
         else:
-            if current_orphan_start is not None:
-                orphan_lines.append((current_orphan_start, idx - 1))
-                current_orphan_start = None
+            if orphan_start is not None:
+                blocks.append({
+                    "type": "html_fragment",
+                    "name": "HTML Orphelin",
+                    "code": "".join(lines[orphan_start:idx]),
+                    "start": orphan_start,
+                    "end": idx - 1,
+                    "children": []
+                })
+                orphan_start = None
+    if orphan_start is not None:
+        blocks.append({
+            "type": "html_fragment",
+            "name": "HTML Orphelin",
+            "code": "".join(lines[orphan_start:]),
+            "start": orphan_start,
+            "end": len(lines) - 1,
+            "children": []
+        })
+    blocks.sort(key=lambda b: b['start'])
+    """
     
-    if current_orphan_start is not None:
-        orphan_lines.append((current_orphan_start, len(lines) - 1))
-
-    # Parser chaque segment orphelin comme du HTML
-    for start, end in orphan_lines:
-        segment_lines = lines[start:end+1]
-        has_html = any(re.match(r"<([a-zA-Z0-9]+)", l.strip()) for l in segment_lines if l.strip())
-        
-        if has_html:
-            children = _recursive_parse(segment_lines, start, 0)
-            if children:
-                final_blocks.extend(children)
-
-    # Trier les blocs finaux par leur position de départ pour maintenir l'ordre du fichier
-    final_blocks.sort(key=lambda b: b['start'])
+    return blocks
     
-    return final_blocks if final_blocks else blocks
     
 def _parse_css_blocks(code: str, file_path: str) -> list[dict]:
     lines = code.splitlines(keepends=True)
@@ -1381,8 +1258,6 @@ class BlockAIEngine:
     def __init__(self, config_getter, log_callback):
         self.get_config = config_getter
         self.log = log_callback
-
-# Dans la classe BlockAIEngine, remplacez les méthodes _build_prompt et process_modification par :
 
 # Dans la classe BlockAIEngine, remplacez les méthodes _build_prompt et process_modification par :
 
@@ -2433,31 +2308,28 @@ class BlockCard(Gtk.Box):
 
     def _open_ai_dialog(self, *_):
         if not self.ai_engine or not self.parent_window: return
-        # Essayer de trouver project_root
-        project_root = None
-        # Le parent_window est souvent l'ApplicationWindow ou l'Application
-        if hasattr(self.parent_window, 'project_root'):
-            project_root = self.parent_window.project_root
-        elif hasattr(self.parent_window, 'win') and hasattr(self.parent_window.win, 'project_root'): # Cas où parent_window est l'App
-            project_root = self.parent_window.project_root # Si c'est l'app elle-même
         
-        # Si ça ne marche pas, on peut essayer de le deviner depuis le fichier courant
-        if not project_root and self.file_ext:
-            # Ceci est une approximation, mieux vaut le passer explicitement
-            pass
+        # Find the actual Gtk.Window ancestor
+        root = self.get_root()
+        if not root: return
 
+        project_root = None
+        # Try to get project_root from the root window (GykhamineStudioApp.win)
+        if hasattr(root, 'project_root'):
+            project_root = root.project_root
+            
         def on_confirm(block, new_code):
             self.block["code"] = new_code
             self.on_save_cb(self.block, new_code)
             self.textview.get_buffer().set_text(new_code)
             apply_syntax_highlighting(self.textview, self.lang)
-            # Toast notification might need adjustment depending on where toast is shown
-            if hasattr(self.parent_window, '_show_toast'):
-                self.parent_window._show_toast("✅ Bloc modifié par IA")
+            if hasattr(root, '_show_toast'):
+                root._show_toast("✅ Bloc modifié par IA")
 
-        dialog = AIModificationDialog(self.parent_window, self.block, self.ai_engine, on_confirm, project_root=project_root)
+        # Pass 'root' (the Window) instead of 'self.parent_window'
+        dialog = AIModificationDialog(root, self.block, self.ai_engine, on_confirm, project_root=project_root)
         dialog.present()
-
+        
     def _move_block(self, direction):
         """Déplace le bloc (et toute sa hiérarchie d'enfants) vers le haut (-1) ou le bas (1) et sauvegarde le fichier."""
         
