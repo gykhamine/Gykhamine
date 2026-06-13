@@ -2964,17 +2964,16 @@ class FilePanel(Gtk.Box):
 
     def load_project(self, root: Path, config: dict):
         self.project_root = root
-        
         # CORRECTION CRITIQUE : Vider complètement le TreeStore
         self.tree_store.clear()
-        
         try:
             self._populate_tree(root, None)
-            self._load_recent_projects(config)
+            # Cette ligne est cruciale : elle met à jour l'onglet "Récents"
+            self._load_recent_projects(config) 
             self.start_watcher(root)
         except Exception as e:
             self._log_message(f"❌ Erreur chargement projet: {e}")
-
+            
     def _populate_tree(self, directory: Path, parent_iter):
         """Remplit l'arbre récursivement. Toutes les erreurs sont loggées."""
         if not directory:
@@ -3018,16 +3017,31 @@ class FilePanel(Gtk.Box):
         except Exception as e:
             self._log_message(f"❌ Erreur critique dans _populate_tree ({directory}): {e}")
 
+    # Dans la classe FilePanel, méthode _load_recent_projects
     def _load_recent_projects(self, config):
-        while child := self.recent_list.get_first_child(): self.recent_list.remove(child)
+        # Nettoyer la liste actuelle
+        while child := self.recent_list.get_first_child(): 
+            self.recent_list.remove(child)
+            
+        # Récupérer les projets depuis la DB
         for proj_path in get_recent_projects(config):
             path = Path(proj_path)
             if path.exists():
-                row = Gtk.ListBoxRow(); row._project_path = path
-                lbl = Gtk.Label(label=f"  📂 {path.name}\n{path.parent}"); lbl.set_xalign(0); lbl.set_margin_start(16); lbl.set_margin_top(6); lbl.set_margin_bottom(6)
-                lbl.set_ellipsize(Pango.EllipsizeMode.END); lbl.set_max_width_chars(35); lbl.add_css_class("file-item")
-                row.set_child(lbl); self.recent_list.append(row)
-
+                row = Gtk.ListBoxRow()
+                row._project_path = path
+                
+                # Affichage plus clair : Nom du projet + Chemin parent
+                lbl = Gtk.Label(label=f"  📂 {path.name}\n{path.parent}")
+                lbl.set_xalign(0)
+                lbl.set_margin_start(16)
+                lbl.set_margin_top(6)
+                lbl.set_margin_bottom(6)
+                lbl.set_ellipsize(Pango.EllipsizeMode.END)
+                lbl.set_max_width_chars(35)
+                lbl.add_css_class("file-item")
+                
+                row.set_child(lbl)
+                self.recent_list.append(row)
     def _on_project_selected(self, lb, row):
         if hasattr(row, "_project_path"): self.on_project_select(row._project_path)
 
@@ -7410,84 +7424,179 @@ class GykhamineStudioApp(Adw.Application):
         self.connect("activate", self._on_activate)
 
     def _on_activate(self, app):
-        provider = Gtk.CssProvider(); provider.load_from_data(CSS.encode())
+        # 1. Application du thème CSS global
+        provider = Gtk.CssProvider()
+        provider.load_from_data(CSS.encode())
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        
-        self.win = Adw.ApplicationWindow(application=app); self.win.set_title("Gykhamine Studio");
+
+        # 2. Création de la fenêtre principale
+        self.win = Adw.ApplicationWindow(application=app)
+        self.win.set_title("Gykhamine Studio")
         self.win.set_default_size(1600, 950)
-        self.toast_overlay = Adw.ToastOverlay(); main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        
+
+        # 3. Structure de base (Toast Overlay & Main Box)
+        self.toast_overlay = Adw.ToastOverlay()
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+
+        # 4. Header Bar avec Logo et Boutons
         header = Adw.HeaderBar()
         logo_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        
         if LOGO_PATH.exists():
             try:
-                from PIL import Image as PilImage; import tempfile
+                from PIL import Image as PilImage
+                import tempfile
                 pil_img = PilImage.open(str(LOGO_PATH)).resize((15, 20), PilImage.LANCZOS)
-                tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False); pil_img.save(tmp.name)
-                logo_picture = Gtk.Picture.new_for_filename(tmp.name); logo_picture.set_hexpand(False); logo_picture.set_vexpand(False); logo_box.append(logo_picture)
-            except Exception: logo_box.append(Gtk.Label(label="GYKHAMINE", css_classes=["heading"]))
-        else: logo_box.append(Gtk.Label(label="GYKHAMINE", css_classes=["heading"]))
+                tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                pil_img.save(tmp.name)
+                logo_picture = Gtk.Picture.new_for_filename(tmp.name)
+                logo_picture.set_hexpand(False)
+                logo_picture.set_vexpand(False)
+                logo_box.append(logo_picture)
+            except Exception:
+                logo_box.append(Gtk.Label(label="GYKHAMINE", css_classes=["heading"]))
+        else:
+            logo_box.append(Gtk.Label(label="GYKHAMINE", css_classes=["heading"]))
+            
         logo_box.append(Gtk.Label(label="GYKHAMINE STUDIO", css_classes=["heading"]))
         header.set_title_widget(logo_box)
-        
-        self.btn_toggle_left = Gtk.Button(label="☰"); self.btn_toggle_left.set_tooltip_text("Show/Hide explorer"); self.btn_toggle_left.connect("clicked", self._toggle_left_panel); header.pack_start(self.btn_toggle_left)
-        btn_open = Gtk.Button(label="📂 Open"); btn_open.add_css_class("suggested-action"); btn_open.connect("clicked", self._open_project_dialog); header.pack_start(btn_open)
-        
-        self.btn_toggle_terminal = Gtk.Button(label="🖥"); self.btn_toggle_terminal.set_tooltip_text("Show/Hide terminal"); self.btn_toggle_terminal.connect("clicked", self._toggle_terminal_panel); header.pack_end(self.btn_toggle_terminal)
-        btn_fullscreen = Gtk.Button(label="⛶"); btn_fullscreen.set_tooltip_text("Fullscreen"); btn_fullscreen.connect("clicked", self._toggle_fullscreen); header.pack_end(btn_fullscreen)
-        self.btn_toggle_right = Gtk.Button(label="⚙"); self.btn_toggle_right.set_tooltip_text("Show/Hide control panel"); self.btn_toggle_right.connect("clicked", self._toggle_right_panel); header.pack_end(self.btn_toggle_right)
-        btn_settings = Gtk.Button(icon_name="preferences-system-symbolic"); btn_settings.set_tooltip_text("Settings"); btn_settings.connect("clicked", self._open_settings); header.pack_end(btn_settings)
-        
+
+        # Boutons de contrôle des panneaux
+        self.btn_toggle_left = Gtk.Button(label="☰")
+        self.btn_toggle_left.set_tooltip_text("Show/Hide explorer")
+        self.btn_toggle_left.connect("clicked", self._toggle_left_panel)
+        header.pack_start(self.btn_toggle_left)
+
+        btn_open = Gtk.Button(label="📂 Open")
+        btn_open.add_css_class("suggested-action")
+        btn_open.connect("clicked", self._open_project_dialog)
+        header.pack_start(btn_open)
+
+        self.btn_toggle_terminal = Gtk.Button(label="🖥")
+        self.btn_toggle_terminal.set_tooltip_text("Show/Hide terminal")
+        self.btn_toggle_terminal.connect("clicked", self._toggle_terminal_panel)
+        header.pack_end(self.btn_toggle_terminal)
+
+        btn_fullscreen = Gtk.Button(label="⛶")
+        btn_fullscreen.set_tooltip_text("Fullscreen")
+        btn_fullscreen.connect("clicked", self._toggle_fullscreen)
+        header.pack_end(btn_fullscreen)
+
+        self.btn_toggle_right = Gtk.Button(label="⚙")
+        self.btn_toggle_right.set_tooltip_text("Show/Hide control panel")
+        self.btn_toggle_right.connect("clicked", self._toggle_right_panel)
+        header.pack_end(self.btn_toggle_right)
+
+        btn_settings = Gtk.Button(icon_name="preferences-system-symbolic")
+        btn_settings.set_tooltip_text("Settings")
+        btn_settings.connect("clicked", self._open_settings)
+        header.pack_end(btn_settings)
+
         main_box.append(header)
-        
+
+        # 5. Panneaux Principaux
         self.main_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
-        self.main_paned.set_vexpand(True); self.main_paned.set_hexpand(True); self.main_paned.set_shrink_start_child(True); self.main_paned.set_shrink_end_child(False); self.main_paned.set_resize_start_child(True); self.main_paned.set_resize_end_child(True)
-        
+        self.main_paned.set_vexpand(True)
+        self.main_paned.set_hexpand(True)
+        self.main_paned.set_shrink_start_child(True)
+        self.main_paned.set_shrink_end_child(False)
+        self.main_paned.set_resize_start_child(True)
+        self.main_paned.set_resize_end_child(True)
+
         self.file_panel = FilePanel(self._on_file_selected, self._load_project, self._on_file_created, self._on_file_imported)
-        self.main_paned.set_start_child(self.file_panel);
+        self.main_paned.set_start_child(self.file_panel)
         self.main_paned.set_position(320)
-        
+
         self.workspace_paned = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
-        self.workspace_paned.set_vexpand(True); self.workspace_paned.set_hexpand(True); self.workspace_paned.set_shrink_start_child(False); self.workspace_paned.set_shrink_end_child(False); self.workspace_paned.set_resize_start_child(True); self.workspace_paned.set_resize_end_child(True)
-        
+        self.workspace_paned.set_vexpand(True)
+        self.workspace_paned.set_hexpand(True)
+        self.workspace_paned.set_shrink_start_child(False)
+        self.workspace_paned.set_shrink_end_child(False)
+        self.workspace_paned.set_resize_start_child(True)
+        self.workspace_paned.set_resize_end_child(True)
+
         self.content_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
-        self.content_paned.set_shrink_start_child(False); self.content_paned.set_shrink_end_child(False); self.content_paned.set_resize_start_child(True); self.content_paned.set_resize_end_child(False)
-        
-        # Enregistrement du logger global vers le terminal panel
+        self.content_paned.set_shrink_start_child(False)
+        self.content_paned.set_shrink_end_child(False)
+        self.content_paned.set_resize_start_child(True)
+        self.content_paned.set_resize_end_child(False)
+
+        # Enregistrement du logger global
         register_logger(lambda msg: self.terminal_panel._log(msg))
-        
+
         self.ai_engine = BlockAIEngine(
             config_getter=lambda: self.config,
             log_callback=lambda msg: self.terminal_panel._log(msg)
         )
-        
+
         self.editor_view = BlockEditorView(
             self._show_toast,
             self._run_python_file,
             get_config_cb=lambda: self.config,
             ai_engine=self.ai_engine
         )
-        self.content_paned.set_start_child(self.editor_view); self.content_paned.set_position(800)
-        
-        self.terminal_panel = TerminalPanel(get_project_root=lambda: self.project_root, get_config=lambda: self.config, show_toast=self._show_toast)
-        self.control_panel = ControlPanel(get_project_root=lambda: self.project_root, get_config=lambda: self.config, show_toast=self._show_toast, terminal_panel=self.terminal_panel)
-        self.ctrl_scroll = Gtk.ScrolledWindow(); self.ctrl_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC); self.ctrl_scroll.set_hexpand(True); self.ctrl_scroll.set_vexpand(True); self.ctrl_scroll.set_child(self.control_panel)
+        self.content_paned.set_start_child(self.editor_view)
+        self.content_paned.set_position(800)
+
+        self.terminal_panel = TerminalPanel(
+            get_project_root=lambda: self.project_root,
+            get_config=lambda: self.config,
+            show_toast=self._show_toast
+        )
+
+        self.control_panel = ControlPanel(
+            get_project_root=lambda: self.project_root,
+            get_config=lambda: self.config,
+            show_toast=self._show_toast,
+            terminal_panel=self.terminal_panel
+        )
+
+        self.ctrl_scroll = Gtk.ScrolledWindow()
+        self.ctrl_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.ctrl_scroll.set_hexpand(True)
+        self.ctrl_scroll.set_vexpand(True)
+        self.ctrl_scroll.set_child(self.control_panel)
         self.content_paned.set_end_child(self.ctrl_scroll)
-        
-        self.workspace_paned.set_start_child(self.content_paned); self.workspace_paned.set_end_child(self.terminal_panel); self.workspace_paned.set_position(600)
-        
+
+        self.workspace_paned.set_start_child(self.content_paned)
+        self.workspace_paned.set_end_child(self.terminal_panel)
+        self.workspace_paned.set_position(600)
+
         self.main_paned.set_end_child(self.workspace_paned)
         main_box.append(self.main_paned)
-        
-        self.toast_overlay.set_child(main_box); self.win.set_content(self.toast_overlay)
+
+        self.toast_overlay.set_child(main_box)
+        self.win.set_content(self.toast_overlay)
         self._apply_theme()
-        
+
+        # États initiaux des panneaux
         self.left_visible, self.right_visible, self.terminal_visible = True, True, True
         self._left_pos, self._right_pos, self._terminal_pos = 320, 800, 600
+
+        # 6. AFFICHER LA FENÊTRE D'ABORD (Crucial pour éviter le vide)
+        self.win.present()
+
+        # 7. CHARGEMENT DU PROJET EN ARRIÈRE-PLAN UNE FOIS L'UI PRÊTE
+        def _load_startup_project():
+            last = self.config.get("last_project", "")
+            if last and Path(last).exists():
+                self._load_project(Path(last))
+            elif len(sys.argv) > 1 and Path(sys.argv[1]).exists():
+                self._load_project(Path(sys.argv[1]))
+            
+            # Forcer le rafraîchissement de la liste "Récents" après chargement
+            GLib.idle_add(self.file_panel._load_recent_projects, self.config)
+
+        # On utilise idle_add pour exécuter le chargement après que GTK ait fini de dessiner la fenêtre
+        GLib.idle_add(_load_startup_project)        
         
-        last = self.config.get("last_project", "")
-        if last and Path(last).exists(): self._load_project(Path(last))
-        elif len(sys.argv) > 1 and Path(sys.argv[1]).exists(): self._load_project(Path(sys.argv[1]))
+        
+        
+        
+        
+        
+        
+        
         
         self.win.present()
 
@@ -7526,12 +7635,22 @@ class GykhamineStudioApp(Adw.Application):
             if folder: self._load_project(Path(folder.get_path()))
         except: pass
 
+    # Dans la classe GykhamineStudioApp, méthode _load_project
     def _load_project(self, path: Path):
-        self.project_root = path; self.config["last_project"] = str(path)
-        add_recent_project(str(path), self.config); self.config = load_config()
-        self.file_panel.load_project(path, self.config); self.win.set_title(f"Gykhamine Studio — {path.name}")
+        self.project_root = path
+        self.config["last_project"] = str(path)
+        
+        # Ajout explicite à l'historique récent
+        add_recent_project(str(path), self.config)
+        
+        # Rechargement de la config pour être sûr d'avoir les dernières données
+        self.config = load_config()
+        
+        # Mise à jour de l'explorateur de fichiers (qui chargera aussi la liste des récents)
+        self.file_panel.load_project(path, self.config)
+        
+        self.win.set_title(f"Gykhamine Studio — {path.name}")
         self._show_toast(f"📂 Project opened: {path.name}")
-
     def _on_file_selected(self, path: Path): self.editor_view.load_file(path)
     def _on_file_created(self, path: Path): self._show_toast(f"✅ Created: {path.name}"); self.editor_view.load_file(path)
     def _on_file_imported(self, path: Path): self._show_toast(f"📥 Imported: {path.name}"); self.editor_view.load_file(path)
