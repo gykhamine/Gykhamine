@@ -145,7 +145,7 @@ def auto_mount_gy():
     # Pour le trouver, lancez dans un terminal : sudo blkid /dev/sdb*
     # Exemple : GY_DEVICE = "UUID=a1b2c3d4-e5f6-7890-g1h2-i3j4k5l6m7n8"
     GY_DEVICE = get_env_value("GY_PARTITION_UUID")  
-    GY_MOUNT_POINT = "/run/media/gykhamine/GYl"
+    GY_MOUNT_POINT = "/run/media/gykhamine/GY"
     
     is_mounted = False
     try:
