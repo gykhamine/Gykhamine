@@ -10,7 +10,8 @@ Launch       : python3 gy.py
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, Adw, GLib, Gio, Gdk, Pango
+gi.require_version("GtkSource", "5")
+from gi.repository import Gtk, Adw, GLib, Gio, Gdk, Pango, GtkSource
 import os, sys, re, subprocess, threading, shutil, json, webbrowser, socket, zipfile, sqlite3, select, pty, tty, termios, fcntl, struct, requests
 from pathlib import Path
 from datetime import datetime
@@ -143,7 +144,7 @@ def auto_mount_gy():
     # ⚠️ REMPLACEZ "VOTRE_UUID_ICI" par l'UUID réel de votre partition /dev/sdb
     # Pour le trouver, lancez dans un terminal : sudo blkid /dev/sdb*
     # Exemple : GY_DEVICE = "UUID=a1b2c3d4-e5f6-7890-g1h2-i3j4k5l6m7n8"
-    GY_DEVICE = get_env_value("GY_PARTITION_UUID", get_env_value("GY_PARTITION_UUID", "UUID=7a8cbe9a-8869-4382-ab24-fa742fe90eca"))  
+    GY_DEVICE = get_env_value("GY_PARTITION_UUID")  
     GY_MOUNT_POINT = "/run/media/gykhamine/GYl"
     
     is_mounted = False
@@ -210,7 +211,7 @@ DEFAULT_CONFIG = {
     "db_path": os.path.join(BASE_PATH, "db/gykhamine_studio.db"),
     
     # PostgreSQL
-    "pg_device": get_env_value("PG_PARTITION_UUID", "UUID=16815455-ad07-4bc6-a9f9-ee9f0b0a6246"),
+    "pg_device": get_env_value("PG_PARTITION_UUID"),
     "pg_mount_point": "/var/lib/pgsql/data",
     "pg_db_name": "ma_base",
     "pg_db_user": "mon_user",
@@ -1551,11 +1552,18 @@ class AIModificationDialog(Gtk.Dialog):
         scroll_orig.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll_orig.set_vexpand(True)
         scroll_orig.set_size_request(-1, 400)
-        self.view_orig = Gtk.TextView()
+        self.view_orig = GtkSource.View()
         self.view_orig.set_editable(False)
         self.view_orig.set_monospace(True)
-        self.view_orig.get_buffer().set_text(block['code'])
-        apply_syntax_highlighting(self.view_orig, self._get_lang(block['type']))
+        self.view_orig.set_show_line_numbers(True)
+        self.view_orig.set_highlight_current_line(True)
+        
+        buf_orig = GtkSource.Buffer()
+        lang_mgr = GtkSource.LanguageManager.get_default()
+        lang_orig = lang_mgr.get_language(self._get_lang(block['type']))
+        if lang_orig: buf_orig.set_language(lang_orig)
+        buf_orig.set_text(block['code'])
+        self.view_orig.set_buffer(buf_orig)
         scroll_orig.set_child(self.view_orig)
         box_orig.append(scroll_orig)
         
@@ -1566,11 +1574,18 @@ class AIModificationDialog(Gtk.Dialog):
         scroll_new.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll_new.set_vexpand(True)
         scroll_new.set_size_request(-1, 400)
-        self.view_new = Gtk.TextView()
+        self.view_new = GtkSource.View()
         self.view_new.set_editable(False)
         self.view_new.set_monospace(True)
-        self.view_new.get_buffer().set_text("// En attente de génération...")
-        apply_syntax_highlighting(self.view_new, self._get_lang(self.block['type']))
+        self.view_new.set_show_line_numbers(True)
+        self.view_new.set_highlight_current_line(True)
+        
+        buf_new = GtkSource.Buffer()
+        lang_mgr = GtkSource.LanguageManager.get_default()
+        lang_new = lang_mgr.get_language(self._get_lang(self.block['type']))
+        if lang_new: buf_new.set_language(lang_new)
+        buf_new.set_text("// En attente de génération...")
+        self.view_new.set_buffer(buf_new)
         scroll_new.set_child(self.view_new)
         box_new.append(scroll_new)
         
@@ -1674,7 +1689,6 @@ class AIModificationDialog(Gtk.Dialog):
         if result:
             self.modified_code = result
             self.view_new.get_buffer().set_text(result)
-            apply_syntax_highlighting(self.view_new, self._get_lang(self.block['type']))
             self.ai_engine.log("✅ Modification générée.")
             
             # Auto-Apply si activé
@@ -2548,12 +2562,31 @@ class BlockCard(Gtk.Box):
         self.editor_box.set_margin_bottom(8)
         self.editor_box.set_visible(False)
         
-        self.textview = Gtk.TextView()
+        self.textview = GtkSource.View()
         self.textview.set_monospace(True)
         self.textview.set_wrap_mode(Gtk.WrapMode.NONE)
+        self.textview.set_show_line_numbers(True)
+        self.textview.set_highlight_current_line(True)
+        self.textview.set_auto_indent(True)
+        self.textview.set_insert_spaces_instead_of_tabs(True)
+        self.textview.set_tab_width(4)
         self.textview.add_css_class("code-editor")
-        self.textview.get_buffer().set_text(self.block["code"])
-        apply_syntax_highlighting(self.textview, self.lang)
+        
+        buffer = GtkSource.Buffer()
+        lang_mgr = GtkSource.LanguageManager.get_default()
+        lang_map = {'py': 'python', 'js': 'javascript', 'css': 'css', 'html': 'html', 'c': 'c', 'cpp': 'cpp', 'sh': 'sh', 'jinja': 'html'}
+        lang_id = lang_map.get(self.lang, 'python')
+        language = lang_mgr.get_language(lang_id)
+        if language:
+            buffer.set_language(language)
+            
+        scheme_mgr = GtkSource.StyleSchemeManager.get_default()
+        scheme = scheme_mgr.get_scheme('Adwaita-dark')
+        if scheme:
+            buffer.set_style_scheme(scheme)
+            
+        buffer.set_text(self.block["code"])
+        self.textview.set_buffer(buffer)
         
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -2625,7 +2658,7 @@ class BlockCard(Gtk.Box):
         
     def _save_from_popup(self, textview, dialog):
         self.block["code"] = textview.get_buffer().get_text(textview.get_buffer().get_start_iter(), textview.get_buffer().get_end_iter(), True)
-        self.on_save_cb(self.block, self.block["code"]); self.textview.get_buffer().set_text(self.block["code"]); apply_syntax_highlighting(self.textview, self.lang); dialog.destroy()
+        self.on_save_cb(self.block, self.block["code"]); self.textview.get_buffer().set_text(self.block["code"]); dialog.destroy()
 
     def _do_save(self, *_):
         self.block["code"] = self.textview.get_buffer().get_text(self.textview.get_buffer().get_start_iter(), self.textview.get_buffer().get_end_iter(), True)
@@ -2650,7 +2683,6 @@ class BlockCard(Gtk.Box):
             self.block["code"] = new_code
             self.on_save_cb(self.block, new_code)
             self.textview.get_buffer().set_text(new_code)
-            apply_syntax_highlighting(self.textview, self.lang)
             if hasattr(root, '_show_toast'):
                 root._show_toast("✅ Bloc modifié par IA")
 
