@@ -1813,8 +1813,13 @@ class LogAnalyzerDialog(Gtk.Dialog):
         scroll_logs = Gtk.ScrolledWindow()
         scroll_logs.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll_logs.set_size_request(-1, 150)
-        self.txt_logs = Gtk.TextView()
+        self.txt_logs = GtkSource.View()
         self.txt_logs.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.txt_logs.set_show_line_numbers(True)
+        self.txt_logs.set_monospace(True)
+        lang_mgr = GtkSource.LanguageManager.get_default()
+        lang_txt = lang_mgr.get_language("txt")
+        if lang_txt: self.txt_logs.get_buffer().set_language(lang_txt)
         scroll_logs.set_child(self.txt_logs)
         content.append(scroll_logs)
         
@@ -1835,11 +1840,17 @@ class LogAnalyzerDialog(Gtk.Dialog):
         scroll_result = Gtk.ScrolledWindow()
         scroll_result.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll_result.set_vexpand(True)
-        self.txt_result = Gtk.TextView()
+        self.txt_result = GtkSource.View()
         self.txt_result.set_editable(False)
         self.txt_result.set_monospace(True)
         self.txt_result.set_wrap_mode(Gtk.WrapMode.WORD)
-        self.txt_result.add_css_class("log-view")
+        self.txt_result.set_show_line_numbers(True)
+        self.txt_result.add_css_class("code-editor")
+        
+        lang_mgr = GtkSource.LanguageManager.get_default()
+        lang_json = lang_mgr.get_language("json")
+        if lang_json: self.txt_result.get_buffer().set_language(lang_json)
+        
         scroll_result.set_child(self.txt_result)
         content.append(scroll_result)
         
@@ -2104,10 +2115,16 @@ class GitManagerDialog(Gtk.Dialog):
         scroll_log = Gtk.ScrolledWindow()
         scroll_log.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll_log.set_vexpand(True)
-        self.txt_log = Gtk.TextView()
+        self.txt_log = GtkSource.View()
         self.txt_log.set_editable(False)
         self.txt_log.set_monospace(True)
+        self.txt_log.set_show_line_numbers(True)
         self.txt_log.add_css_class("log-view")
+        
+        lang_mgr = GtkSource.LanguageManager.get_default()
+        lang_sh = lang_mgr.get_language("sh")
+        if lang_sh: self.txt_log.get_buffer().set_language(lang_sh)
+        
         scroll_log.set_child(self.txt_log)
         content.append(scroll_log)
         
@@ -2327,8 +2344,10 @@ class BusinessProcessDialog(Gtk.Dialog):
         scroll_in = Gtk.ScrolledWindow()
         scroll_in.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll_in.set_size_request(-1, 120)
-        self.txt_problem = Gtk.TextView()
+        self.txt_problem = GtkSource.View()
         self.txt_problem.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.txt_problem.set_show_line_numbers(True)
+        self.txt_problem.set_monospace(True)
         scroll_in.set_child(self.txt_problem)
         content.append(scroll_in)
 
@@ -2345,11 +2364,17 @@ class BusinessProcessDialog(Gtk.Dialog):
         scroll_out = Gtk.ScrolledWindow()
         scroll_out.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll_out.set_vexpand(True)
-        self.txt_result = Gtk.TextView()
+        self.txt_result = GtkSource.View()
         self.txt_result.set_editable(False)
         self.txt_result.set_monospace(True)
         self.txt_result.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.txt_result.set_show_line_numbers(True)
         self.txt_result.add_css_class("code-editor")
+        
+        lang_mgr = GtkSource.LanguageManager.get_default()
+        lang_json = lang_mgr.get_language("json")
+        if lang_json: self.txt_result.get_buffer().set_language(lang_json)
+        
         scroll_out.set_child(self.txt_result)
         content.append(scroll_out)
 
@@ -2562,6 +2587,7 @@ class BlockCard(Gtk.Box):
         self.editor_box.set_margin_bottom(8)
         self.editor_box.set_visible(False)
         
+        # 1. Création de la Vue Source
         self.textview = GtkSource.View()
         self.textview.set_monospace(True)
         self.textview.set_wrap_mode(Gtk.WrapMode.NONE)
@@ -2572,19 +2598,36 @@ class BlockCard(Gtk.Box):
         self.textview.set_tab_width(4)
         self.textview.add_css_class("code-editor")
         
+        # 2. Configuration du Buffer et du Langage
         buffer = GtkSource.Buffer()
         lang_mgr = GtkSource.LanguageManager.get_default()
-        lang_map = {'py': 'python', 'js': 'javascript', 'css': 'css', 'html': 'html', 'c': 'c', 'cpp': 'cpp', 'sh': 'sh', 'jinja': 'html'}
-        lang_id = lang_map.get(self.lang, 'python')
+        
+        # Mapping des extensions vers les IDs de langage GtkSource
+        lang_map = {
+            'py': 'python', 'js': 'javascript', 'css': 'css', 
+            'html': 'html', 'c': 'c', 'cpp': 'cpp', 'sh': 'sh', 
+            'jinja': 'html' # Jinja utilise souvent la coloration HTML comme base
+        }
+        
+        lang_id = lang_map.get(self.lang, 'text') # Fallback sur 'text' si inconnu
         language = lang_mgr.get_language(lang_id)
+        
         if language:
             buffer.set_language(language)
             
+        # 3. APPLICATION DU THÈME SOMBRE (C'est ici que l'aperçu revient !)
         scheme_mgr = GtkSource.StyleSchemeManager.get_default()
+        # Essayer d'abord 'Adwaita-dark', sinon 'cobalt', sinon 'oblivion'
         scheme = scheme_mgr.get_scheme('Adwaita-dark')
+        if not scheme:
+            scheme = scheme_mgr.get_scheme('cobalt')
+        if not scheme:
+            scheme = scheme_mgr.get_scheme('oblivion')
+            
         if scheme:
             buffer.set_style_scheme(scheme)
             
+        # 4. Chargement du code
         buffer.set_text(self.block["code"])
         self.textview.set_buffer(buffer)
         
@@ -2594,16 +2637,15 @@ class BlockCard(Gtk.Box):
         scroll.set_child(self.textview)
         
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        # Bouton "Save" supprimé ici pour ne laisser que la gestion via la nav bar
         btn_cancel = Gtk.Button(label="✕ Close")
         btn_cancel.add_css_class("cancel-btn")
         btn_cancel.connect("clicked", self._toggle_edit)
-        
         bar.append(btn_cancel)
+        
         self.editor_box.append(scroll)
         self.editor_box.append(bar)
         self.append(self.editor_box)
-
+        
     def _toggle_edit(self, *_):
         if self.expanded:
             # Sauvegarde automatique des modifications en mémoire avant de fermer l'aperçu
@@ -2927,7 +2969,16 @@ class FilePanel(Gtk.Box):
         content.append(Gtk.Label(label="Nom du fichier (avec extension):", xalign=0))
         entry = Gtk.Entry(); entry.set_placeholder_text("ex: style.css, script.js, main.c"); content.append(entry)
         content.append(Gtk.Label(label="Contenu initial (optionnel):", xalign=0, margin_top=8))
-        text_buf = Gtk.TextBuffer(); text_view = Gtk.TextView.new_with_buffer(text_buf); text_view.set_size_request(-1, 100)
+        text_buf = GtkSource.Buffer()
+        text_view = GtkSource.View.new_with_buffer(text_buf)
+        text_view.set_size_request(-1, 100)
+        text_view.set_show_line_numbers(True)
+        text_view.set_monospace(True)
+        
+        lang_mgr = GtkSource.LanguageManager.get_default()
+        lang_py = lang_mgr.get_language("python")
+        if lang_py: text_buf.set_language(lang_py)
+        
         scroll = Gtk.ScrolledWindow(); scroll.set_child(text_view); content.append(scroll)
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         btn_cancel = Gtk.Button(label="Annuler"); btn_create = Gtk.Button(label="✅ Créer"); btn_create.add_css_class("suggested-action")
@@ -3100,7 +3151,18 @@ class TerminalPanel(Gtk.Box):
         btn_clear = Gtk.Button(label="🗑 Clear"); btn_clear.add_css_class("ctrl-btn-small"); btn_clear.connect("clicked", lambda *_: self.log_view.get_buffer().set_text(""))
         header.append(btn_clear); self.append(header); self.append(Gtk.Separator())
         
-        self.log_view = Gtk.TextView(); self.log_view.set_editable(False); self.log_view.set_monospace(True); self.log_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR); self.log_view.set_cursor_visible(False); self.log_view.add_css_class("log-view")
+        self.log_view = GtkSource.View()
+        self.log_view.set_editable(False)
+        self.log_view.set_monospace(True)
+        self.log_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self.log_view.set_cursor_visible(False)
+        self.log_view.set_show_line_numbers(False)
+        self.log_view.add_css_class("log-view")
+        
+        # Configuration langage Shell pour les logs
+        lang_mgr = GtkSource.LanguageManager.get_default()
+        lang_sh = lang_mgr.get_language("sh")
+        if lang_sh: self.log_view.get_buffer().set_language(lang_sh)
         log_scroll = Gtk.ScrolledWindow(); log_scroll.set_hexpand(True); log_scroll.set_vexpand(True); log_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC); log_scroll.set_child(self.log_view)
         self.append(log_scroll)
         
@@ -4227,7 +4289,11 @@ class ControlPanel(Gtk.Box):
         row = 0
         
         grid_client.attach(Gtk.Label(label="Serveurs actuels :", xalign=0), 0, row, 1, 1)
-        self.txt_current_dns = Gtk.TextView(); self.txt_current_dns.set_editable(False); self.txt_current_dns.set_monospace(True); self.txt_current_dns.set_size_request(-1, 50)
+        self.txt_current_dns = GtkSource.View()
+        self.txt_current_dns.set_editable(False)
+        self.txt_current_dns.set_monospace(True)
+        self.txt_current_dns.set_size_request(-1, 50)
+        self.txt_current_dns.set_show_line_numbers(True)
         s_dns = Gtk.ScrolledWindow(); s_dns.set_child(self.txt_current_dns); grid_client.attach(s_dns, 1, row, 1, 1); row += 1
         
         grid_client.attach(Gtk.Label(label="Nouveaux DNS (ex: 1.1.1.1 8.8.8.8):", xalign=0), 0, row, 1, 1)
@@ -4636,7 +4702,10 @@ chmod 700 /run/tor
         
         # Zone de log pour les repos
         scroll_repo_log = Gtk.ScrolledWindow(); scroll_repo_log.set_size_request(-1, 150)
-        self.txt_repo_log = Gtk.TextView(); self.txt_repo_log.set_editable(False); self.txt_repo_log.set_monospace(True)
+        self.txt_repo_log = GtkSource.View()
+        self.txt_repo_log.set_editable(False)
+        self.txt_repo_log.set_monospace(True)
+        self.txt_repo_log.set_show_line_numbers(True)
         scroll_repo_log.set_child(self.txt_repo_log)
         box.append(scroll_repo_log)
         
@@ -6060,12 +6129,18 @@ class CCompilerDialog(Gtk.Dialog):
         
         self.scrolled = Gtk.ScrolledWindow()
         self.scrolled.set_vexpand(True)
-        self.text_view = Gtk.TextView()
+        self.text_view = GtkSource.View()
         self.text_view.set_monospace(True)
         self.text_view.set_wrap_mode(Gtk.WrapMode.NONE)
+        self.text_view.set_show_line_numbers(True)
+        self.text_view.set_highlight_current_line(True)
         self.text_view.add_css_class("code-editor")
-        self.text_view.get_buffer().set_text("// Collez votre code C ici\n#include <stdio.h>\nint main() {\nprintf(\"Hello from Gykhamine!\\n\");\nreturn 0;\n}")
-        apply_syntax_highlighting(self.text_view, "c")
+        
+        buf_c = GtkSource.Buffer()
+        lang_c = GtkSource.LanguageManager.get_default().get_language("c")
+        if lang_c: buf_c.set_language(lang_c)
+        buf_c.set_text("// Collez votre code C ici\n#include <stdio.h>\nint main() {\nprintf(\"Hello from Gykhamine!\\n\");\nreturn 0;\n}")
+        self.text_view.set_buffer(buf_c)
         self.scrolled.set_child(self.text_view)
         content.append(self.scrolled)
         
@@ -6114,7 +6189,7 @@ class CCompilerDialog(Gtk.Dialog):
             def _thread():
                 result = self.ai_engine.process_modification("c_block", code, intent, mode="cpp_optimize")
                 if result:
-                    GLib.idle_add(lambda: (self.text_view.get_buffer().set_text(result), self._log("✅ Code optimisé généré."), apply_syntax_highlighting(self.text_view, "c")))
+                    GLib.idle_add(lambda: (self.text_view.get_buffer().set_text(result), self._log("✅ Code optimisé généré."), self.text_view.set_buffer(buf_c)))
                 else:
                     GLib.idle_add(lambda: self._log("❌ Échec de la génération d'optimisation."))
             threading.Thread(target=_thread, daemon=True).start()
@@ -6618,11 +6693,12 @@ class DjangoMasterDocDialog(Gtk.Dialog):
         scroll_content.set_vexpand(True)
         scroll_content.set_hexpand(True)
         
-        self.content_view = Gtk.TextView()
+        self.content_view = GtkSource.View()
         self.content_view.set_editable(False)
         self.content_view.set_cursor_visible(False)
         self.content_view.set_wrap_mode(Gtk.WrapMode.WORD)
         self.content_view.set_monospace(False)
+        self.content_view.set_show_line_numbers(False)
         self.content_view.add_css_class("code-editor")
         self.content_view.set_margin_start(30)
         self.content_view.set_margin_end(30)
