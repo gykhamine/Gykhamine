@@ -1445,18 +1445,48 @@ OBJECTIF : {format_instruction}
         return prompt
 
     def _clean_json_output(self, text: str) -> str:
-        text = text.strip()
-        text = re.sub(r'^```(?:json)?\s*', '', text)
-        text = re.sub(r'\s*```$', '', text)
-        return text.strip()
+        """
+        Extrait STRICTEMENT le JSON entre les backticks.
+        Si pas de backticks -> Réponse non admise.
+        """
+        if not text: return "{}"
+        
+        # Recherche du bloc ```json ... ``` ou ``` ... ```
+        match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
+        
+        if match:
+            content = match.group(1).strip()
+            # Vérification basique que c'est bien du JSON
+            if content.startswith('{') or content.startswith('['):
+                return content
+        
+        # Si on arrive ici, c'est qu'il n'y a pas de backticks ou pas de JSON valide dedans
+        return "FORMAT NON AUTORISÉ : L'IA doit renvoyer le JSON entre des balises ```json ... ```"
 
-    def process_modification(self, block_type, current_code, user_intent, context_deps="", mode="modify"):
+    def _clean_code_output(self, text, block_type):
+        """
+        Extrait STRICTEMENT le code entre les backticks.
+        Si pas de backticks -> Réponse non admise.
+        """
+        if not text: return ""
+        
+        # Recherche du bloc ```lang ... ```
+        match = re.search(r'```[a-zA-Z]*\s*([\s\S]*?)\s*```', text)
+        
+        if match:
+            return match.group(1).strip()
+        
+        # Si on arrive ici, c'est qu'il n'y a pas de backticks
+        return "FORMAT NON AUTORISÉ : L'IA doit renvoyer le code entre des balises ```... ```"
+
+    def process_modification(self, block_type, current_code, user_intent, context_deps="", mode="modify", custom_role=None):
         cfg = self.get_config()
         host = cfg.get("llama_host", "127.0.0.1")
-        port = cfg.get("llama_port", "8080")
+        port = cfg.get("llama_port", 8080)
         url = f"http://{host}:{port}/v1/chat/completions"
         
-        prompt = self._build_prompt(block_type, current_code, user_intent, context_deps, mode=mode)
+        # Passage du custom_role au prompt builder
+        prompt = self._build_prompt(block_type, current_code, user_intent, context_deps, mode=mode, custom_role=custom_role)
         
         payload = {
             "model": "qwen2.5-coder",
@@ -1469,14 +1499,17 @@ OBJECTIF : {format_instruction}
             "max_tokens": 2048,
             "stream": False
         }
-        
         try:
             self.log(f"🤖 Envoi de la requête IA ({mode})...")
             response = requests.post(url, json=payload, timeout=12000)
             if response.status_code == 200:
                 data = response.json()
                 raw_content = data['choices'][0]['message']['content']
-                cleaned_code = self._clean_code_output(raw_content, block_type if mode != "terminal_gen" else "shell")
+                # Utilisation du bon nettoyeur selon le mode
+                if mode in ["log_analysis", "business_process"]:
+                    cleaned_code = self._clean_json_output(raw_content)
+                else:
+                    cleaned_code = self._clean_code_output(raw_content, block_type if mode != "terminal_gen" else "shell")
                 return cleaned_code
             else:
                 self.log(f"❌ Erreur API IA: {response.status_code}")
@@ -1484,25 +1517,7 @@ OBJECTIF : {format_instruction}
         except Exception as e:
             self.log(f"❌ Exception connexion IA: {e}")
             return None
-
-    def _clean_code_output(self, text, block_type):
-        text = re.sub(r'^```[a-zA-Z]*\n', '', text)
-        text = re.sub(r'\n```$', '', text)
-        text = text.strip()
-        
-        if block_type in ["function", "class", "django_model", "django_view"]:
-            lines = text.split('\n')
-            code_start_idx = 0
-            for i, line in enumerate(lines):
-                stripped = line.strip()
-                if stripped and not stripped.startswith(("Voici", "Here is", "Le code", "# Note")):
-                    if any(keyword in stripped for keyword in ["def ", "class ", "import ", "from ", "@"]):
-                        code_start_idx = i
-                        break
-            if code_start_idx > 0:
-                text = "\n".join(lines[code_start_idx:])
-        return text
-
+            
 # --- NOUVEAU : Dialogues pour le Modificateur Contextuel (Version Simplifiée) ---
 class AIModificationDialog(Gtk.Dialog):
     def __init__(self, parent, block, ai_engine, on_confirm_cb, project_root=None):
@@ -2457,12 +2472,66 @@ class BusinessProcessDialog(Gtk.Dialog):
         if not problem:
             self.log_callback("❌ Veuillez décrire votre demande.")
             return
-            
+
         active_text = self.combo_role.get_active_text()
         selected_role_prompt = self.default_roles.get(active_text) or self.custom_roles.get(active_text, "Tu es un assistant IA polyvalent. Réponds UNIQUEMENT en format JSON.")
         
         self.txt_result.get_buffer().set_text("Recherche dans le cache...")
         
+        def _thread():
+            # 1. Vérifier le cache spécifique aux processus JSON
+            cached = get_cached_process(problem)
+            if cached:
+                result = cached["json_content"]
+                GLib.idle_add(lambda: self.log_callback(f"📂 Réponse récupérée depuis la DB (Cache Processus)"))
+            else:
+                # 2. Appel IA avec gestion robuste des erreurs de connexion
+                GLib.idle_add(lambda: self.txt_result.get_buffer().set_text("Connexion à Llama.cpp en cours..."))
+                
+                try:
+                    result = self.ai_engine.process_modification(
+                        "business_process",
+                        "Contexte: Demande utilisateur",
+                        problem,
+                        mode="business_process",
+                        custom_role=selected_role_prompt
+                    )
+                    
+                    if result is None:
+                        raise ConnectionError("Llama server ne répond pas ou a retourné une erreur.")
+                        
+                    save_process_to_cache(problem, result, role_type=active_text)
+                    GLib.idle_add(lambda: self.log_callback(f"💾 Nouvelle réponse sauvegardée (Cache Processus)"))
+                    
+                except Exception as e:
+                    error_msg = f"❌ Échec de connexion IA: {str(e)}"
+                    GLib.idle_add(lambda: (
+                        self.txt_result.get_buffer().set_text(error_msg),
+                        self.log_callback(error_msg)
+                    ))
+                    return
+
+            # Nettoyage garanti des balises markdown ```json par le parseur
+            clean_result = self.ai_engine._clean_json_output(result)
+            
+            # Vérification si le nettoyage a échoué (format non autorisé)
+            if "FORMAT NON AUTORISÉ" in clean_result:
+                 GLib.idle_add(lambda: (
+                    self.txt_result.get_buffer().set_text(clean_result),
+                    self.log_callback("⚠️ L'IA n'a pas respecté le format JSON strict.")
+                ))
+            else:
+                GLib.idle_add(lambda: self.txt_result.get_buffer().set_text(clean_result))
+                GLib.idle_add(lambda: self.log_callback(f"📊 RÉPONSE GÉNÉRÉE (Rôle: {active_text}, Format: JSON)."))
+                
+                # Auto-Copy si activé
+                if self.switch_auto_copy.get_active():
+                    GLib.idle_add(lambda: (
+                        Gdk.Display.get_default().get_clipboard().set(clean_result),
+                        self.log_callback("📋 Résultat copié automatiquement dans le presse-papiers.")
+                    ))
+
+        threading.Thread(target=_thread, daemon=True).start()        
         def _thread():
             # 1. Vérifier le cache spécifique aux processus JSON
             cached = get_cached_process(problem)
