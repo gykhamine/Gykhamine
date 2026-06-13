@@ -180,34 +180,6 @@ def auto_mount_gy():
 if not auto_mount_gy():
     print("⚠️ Le montage automatique a échoué. L'application va continuer mais certains chemins GY peuvent être inaccessibles.")
     
-
-# ═══════════════════════════════════════════════════════════════════════
-#  HELPER : LECTURE .ENV EXTERNE POUR UUID
-# ═══════════════════════════════════════════════════════════════════════
-#  HELPER : LECTURE .ENV EXTERNE (Simple & Robuste)
-# ═══════════════════════════════════════════════════════════════════════
-def get_env_value(key: str, default: str = "") -> str:
-    """
-    Lit un fichier .env externe pour récupérer une variable.
-    Utilise 'with' pour une gestion propre des fichiers.
-    """
-    env_path = Path("/run/media/gykhamine/GY/Gykhamine/gy/.env")
-    if not env_path.exists():
-        return default
-    
-    try:
-        with open(env_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    # Match KEY=VALUE ou KEY="VALUE"
-                    match = re.match(rf'^{re.escape(key)}\s*=\s*["\']?(.*?)["\']?$', line)
-                    if match:
-                        return match.group(1).strip()
-    except Exception as e:
-        global_log(f"⚠️ Erreur lecture .env pour {key}: {e}")
-    return default
-
 # 2. Définition des valeurs par défaut uniquement
 DEFAULT_CONFIG = {
     "llama_server_path": "/run/media/gykhamine/GY/gysingner/llama-server",
