@@ -15,6 +15,7 @@ import os, sys, re, subprocess, threading, shutil, json, webbrowser, socket, zip
 from pathlib import Path
 from datetime import datetime
 import time
+import hashlib
 # ═══════════════════════════════════════════════════════════════════════
 #  GLOBAL LOGGER SYSTEM (Centralisation des erreurs)
 # ═══════════════════════════════════════════════════════════════════════
@@ -258,9 +259,43 @@ def _init_db(db_path: Path):
     cur.execute("CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     cur.execute("CREATE TABLE IF NOT EXISTS recent_projects (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT UNIQUE NOT NULL, opened_at TEXT NOT NULL)")
     cur.execute("CREATE TABLE IF NOT EXISTS memory (id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL, file_path TEXT NOT NULL, block_name TEXT, action TEXT, ts TEXT NOT NULL, UNIQUE(project, file_path, block_name))")
+    
+    # --- Table 1 : Cache Commandes Shell ---
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ai_cmd_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            intent_hash TEXT UNIQUE NOT NULL, 
+            command TEXT NOT NULL, 
+            is_process INTEGER DEFAULT 0, 
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # --- Table 2 : Cache Blocs de Code (Python, C, JS...) ---
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ai_block_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            intent_hash TEXT UNIQUE NOT NULL, 
+            content TEXT NOT NULL, 
+            block_type TEXT DEFAULT 'code', 
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # --- Table 3 : Cache Processus & JSON (Élaborateur) ---
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ai_process_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            intent_hash TEXT UNIQUE NOT NULL, 
+            json_content TEXT NOT NULL, 
+            role_type TEXT DEFAULT 'general', 
+            created_at TEXT NOT NULL
+        )
+    """)
+    
     con.commit()
     con.close()
-
+    
 def load_config() -> dict:
     db_path = _get_db_path()
     _init_db(db_path)
@@ -327,6 +362,79 @@ def log_to_file(config: dict, message: str):
             f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
     except Exception as e: 
         global_log(f"❌ Échec écriture fichier log: {e}")
+        
+
+
+
+def _get_intent_hash(intent: str) -> str:
+    return hashlib.md5(intent.strip().lower().encode('utf-8')).hexdigest()
+
+# --- Fonctions pour le Générateur de Commandes (Shell) ---
+def get_cached_command(intent: str) -> dict:
+    db_path = _get_db_path()
+    _init_db(db_path)
+    try:
+        con = sqlite3.connect(str(db_path))
+        row = con.execute("SELECT command, is_process FROM ai_cmd_cache WHERE intent_hash = ?", (_get_intent_hash(intent),)).fetchone()
+        con.close()
+        if row: return {"command": row[0], "is_process": bool(row[1])}
+    except Exception: pass
+    return None
+
+def save_command_to_cache(intent: str, command: str, is_process: bool = False):
+    db_path = _get_db_path()
+    _init_db(db_path)
+    try:
+        con = sqlite3.connect(str(db_path))
+        con.execute("INSERT OR REPLACE INTO ai_cmd_cache (intent_hash, command, is_process, created_at) VALUES (?, ?, ?, ?)", 
+                    (_get_intent_hash(intent), command, int(is_process), datetime.now().isoformat()))
+        con.commit(); con.close()
+    except Exception as e: global_log(f"❌ Erreur cache cmd: {e}")
+
+# --- Fonctions pour le Modificateur de Blocs (Code) ---
+def get_cached_block(intent: str) -> dict:
+    db_path = _get_db_path()
+    _init_db(db_path)
+    try:
+        con = sqlite3.connect(str(db_path))
+        row = con.execute("SELECT content, block_type FROM ai_block_cache WHERE intent_hash = ?", (_get_intent_hash(intent),)).fetchone()
+        con.close()
+        if row: return {"content": row[0], "block_type": row[1]}
+    except Exception: pass
+    return None
+
+def save_block_to_cache(intent: str, content: str, block_type: str = 'code'):
+    db_path = _get_db_path()
+    _init_db(db_path)
+    try:
+        con = sqlite3.connect(str(db_path))
+        con.execute("INSERT OR REPLACE INTO ai_block_cache (intent_hash, content, block_type, created_at) VALUES (?, ?, ?, ?)", 
+                    (_get_intent_hash(intent), content, block_type, datetime.now().isoformat()))
+        con.commit(); con.close()
+    except Exception as e: global_log(f"❌ Erreur cache bloc: {e}")
+
+# --- Fonctions pour l'Élaborateur (Processus JSON) ---
+def get_cached_process(intent: str) -> dict:
+    db_path = _get_db_path()
+    _init_db(db_path)
+    try:
+        con = sqlite3.connect(str(db_path))
+        row = con.execute("SELECT json_content, role_type FROM ai_process_cache WHERE intent_hash = ?", (_get_intent_hash(intent),)).fetchone()
+        con.close()
+        if row: return {"json_content": row[0], "role_type": row[1]}
+    except Exception: pass
+    return None
+
+def save_process_to_cache(intent: str, json_content: str, role_type: str = 'general'):
+    db_path = _get_db_path()
+    _init_db(db_path)
+    try:
+        con = sqlite3.connect(str(db_path))
+        con.execute("INSERT OR REPLACE INTO ai_process_cache (intent_hash, json_content, role_type, created_at) VALUES (?, ?, ?, ?)", 
+                    (_get_intent_hash(intent), json_content, role_type, datetime.now().isoformat()))
+        con.commit(); con.close()
+    except Exception as e: global_log(f"❌ Erreur cache process: {e}")
+
 
 def is_port_in_use(port: int, host: str = "0.0.0.0") -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -1385,10 +1493,23 @@ class AIModificationDialog(Gtk.Dialog):
         content.set_spacing(10)
         set_margins(content, 16)
         
-        # Header
+        # --- Header avec Switch Auto-Apply ---
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         lbl_type = Gtk.Label(label=f"Type: {block['type'].upper()}", css_classes=["badge-function"], margin_end=10)
         header.append(lbl_type)
+        
+        spacer = Gtk.Box(hexpand=True)
+        header.append(spacer)
+        
+        self.switch_auto_apply = Gtk.Switch()
+        self.switch_auto_apply.set_tooltip_text("Appliquer automatiquement le code généré sans confirmation")
+        lbl_auto = Gtk.Label(label="⚡ Auto-Apply", css_classes=["dim-label"])
+        
+        auto_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        auto_box.append(lbl_auto)
+        auto_box.append(self.switch_auto_apply)
+        header.append(auto_box)
+        
         content.append(header)
         content.append(Gtk.Separator())
         
@@ -1431,8 +1552,10 @@ class AIModificationDialog(Gtk.Dialog):
         bottom_action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10, halign=Gtk.Align.END)
         btn_reject = Gtk.Button(label="❌ Annuler")
         btn_reject.connect("clicked", lambda *_: self.destroy())
+        
         btn_accept = Gtk.Button(label="✅ Conserver", css_classes=["suggested-action"])
         btn_accept.connect("clicked", self._on_accept)
+        
         bottom_action_box.append(btn_reject)
         bottom_action_box.append(btn_accept)
         box_new.append(bottom_action_box)
@@ -1441,6 +1564,7 @@ class AIModificationDialog(Gtk.Dialog):
         paned.set_end_child(box_new)
         paned.set_position(500)
         content.append(paned)
+        
         content.append(Gtk.Separator())
         
         # Prompt Box
@@ -1483,34 +1607,54 @@ class AIModificationDialog(Gtk.Dialog):
     def _on_generate(self, *_):
         buf = self.intent_entry.get_buffer()
         intent = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True).strip()
+        
         if len(intent.split()) > 150:
             self.ai_engine.log("⚠️ Votre demande dépasse 150 mots.")
             return
         if not intent:
             self.ai_engine.log("⚠️ Veuillez décrire la modification.")
             return
-        
+            
         # Construction du contexte (vide car supprimé de l'UI)
         self.context_deps = ""
         
         self.spinner.start()
         self.spinner.set_visible(True)
         self.btn_generate.set_sensitive(False)
+        
         threading.Thread(target=self._thread_generate, args=(self.block['type'], intent), daemon=True).start()
 
     def _thread_generate(self, btype, intent):
-        result = self.ai_engine.process_modification(btype, self.block['code'], intent, self.context_deps, mode="contextual_modify")
-        GLib.idle_add(self._update_ui_with_result, result)
+        # 1. Vérifier le cache spécifique aux blocs de code
+        cached = get_cached_block(intent)
+        
+        if cached:
+            result = cached["content"]
+            GLib.idle_add(lambda: self.ai_engine.log(f"📂 Modification récupérée depuis la DB (Cache Code)"))
+        else:
+            # 2. Appel IA
+            result = self.ai_engine.process_modification(btype, self.block['code'], intent, self.context_deps, mode="contextual_modify")
+            
+            if result:
+                save_block_to_cache(intent, result, block_type=btype)
+                GLib.idle_add(lambda: self.ai_engine.log(f"💾 Nouvelle modification sauvegardée (Cache Code)"))
 
+        GLib.idle_add(self._update_ui_with_result, result)
+        
     def _update_ui_with_result(self, result):
         self.spinner.stop()
         self.spinner.set_visible(False)
         self.btn_generate.set_sensitive(True)
+        
         if result:
             self.modified_code = result
             self.view_new.get_buffer().set_text(result)
             apply_syntax_highlighting(self.view_new, self._get_lang(self.block['type']))
             self.ai_engine.log("✅ Modification générée.")
+            
+            # Auto-Apply si activé
+            if self.switch_auto_apply.get_active():
+                self._on_accept(None)
         else:
             self.ai_engine.log("❌ Échec de la génération ou erreur serveur.")
             self.view_new.get_buffer().set_text("// Erreur lors de la génération.")
@@ -1528,7 +1672,9 @@ class AIModificationDialog(Gtk.Dialog):
             "c_block": "c", "shell": "bash", "css": "css"
         }
         return mapping.get(btype, "python")
-
+        
+        
+        
 class LlamaSetupDialog(Gtk.Dialog):
     def __init__(self, parent, config, on_save_and_start):
         super().__init__(title="⚙️ Configuration Llama.cpp (Sudo)", transient_for=parent, default_width=500, default_height=300)
@@ -1688,66 +1834,172 @@ class LogAnalyzerDialog(Gtk.Dialog):
 
 class AICmdGeneratorDialog(Gtk.Dialog):
     def __init__(self, parent, terminal_panel):
-        super().__init__(title="🤖 Générateur de Commandes IA", transient_for=parent, default_width=600, default_height=400)
+        super().__init__(title="🤖 Générateur de Commandes IA", transient_for=parent, default_width=600, default_height=450)
         self.add_css_class("rounded-dialog")
         self.terminal_panel = terminal_panel
         self.generated_cmd = ""
+        self.is_process_mode = False
         
         content = self.get_content_area()
         content.set_spacing(12)
         set_margins(content, 16)
         
-        content.append(Gtk.Label(label="Décrivez l'action en langage naturel :", xalign=0, css_classes=["heading"]))
+        # --- Header avec Switch Auto-Run ---
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        header_box.append(Gtk.Label(label="Décrivez l'action :", xalign=0, css_classes=["heading"]))
+        
+        spacer = Gtk.Box(hexpand=True)
+        header_box.append(spacer)
+        
+        self.switch_auto_run = Gtk.Switch()
+        self.switch_auto_run.set_tooltip_text("Exécuter automatiquement la commande trouvée/générée")
+        lbl_auto = Gtk.Label(label="⚡ Auto-Run", css_classes=["dim-label"])
+        
+        auto_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        auto_box.append(lbl_auto)
+        auto_box.append(self.switch_auto_run)
+        header_box.append(auto_box)
+        
+        content.append(header_box)
+        
+        # --- Input avec Placeholder (Correction du bug TextView) ---
         scroll_in = Gtk.ScrolledWindow()
         scroll_in.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll_in.set_size_request(-1, 100)
+        
         self.txt_input = Gtk.TextView()
         self.txt_input.set_wrap_mode(Gtk.WrapMode.WORD)
-        scroll_in.set_child(self.txt_input)
+        
+        # Création du placeholder via Overlay
+        overlay = Gtk.Overlay()
+        overlay.set_child(self.txt_input)
+        
+        self.lbl_placeholder = Gtk.Label(
+            label="Ex: 'Mettre à jour le système' ou 'Liste: installer git, cloner repo, entrer dans le dossier'",
+            xalign=0, yalign=0, margin_start=8, margin_top=8
+        )
+        self.lbl_placeholder.add_css_class("dim-label")
+        overlay.add_overlay(self.lbl_placeholder)
+        
+        # Gestion de la visibilité du placeholder
+        self.txt_input.get_buffer().connect("changed", self._on_input_changed)
+        self._on_input_changed(self.txt_input.get_buffer())
+        
+        scroll_in.set_child(overlay)
         content.append(scroll_in)
         
-        btn_translate = Gtk.Button(label="🔄 Générer Commande")
+        # --- Bouton Générer ---
+        btn_translate = Gtk.Button(label="🔄 Générer / Chercher")
         btn_translate.add_css_class("suggested-action")
         btn_translate.connect("clicked", self._on_translate)
         content.append(btn_translate)
         
-        content.append(Gtk.Label(label="Commande générée :", xalign=0, css_classes=["heading"], margin_top=8))
+        content.append(Gtk.Label(label="Résultat :", xalign=0, css_classes=["heading"], margin_top=8))
+        
+        # Zone de résultat plus grande pour les processus
+        scroll_res = Gtk.ScrolledWindow()
+        scroll_res.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll_res.set_size_request(-1, 100)
         self.lbl_result = Gtk.Label(label="$ ...", xalign=0, css_classes=["terminal-prompt"])
         self.lbl_result.set_selectable(True)
-        content.append(self.lbl_result)
+        self.lbl_result.set_wrap(True) # Permet le retour à la ligne
+        scroll_res.set_child(self.lbl_result)
+        content.append(scroll_res)
         
+        # --- Actions ---
         action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, halign=Gtk.Align.END, margin_top=12)
         btn_cancel = Gtk.Button(label="Annuler")
         btn_cancel.connect("clicked", lambda *_: self.destroy())
+        
         self.btn_exec = Gtk.Button(label="▶ Exécuter")
         self.btn_exec.add_css_class("ctrl-btn-start")
         self.btn_exec.set_sensitive(False)
         self.btn_exec.connect("clicked", self._on_execute)
+        
         action_box.append(btn_cancel)
         action_box.append(self.btn_exec)
         content.append(action_box)
 
+    def _on_input_changed(self, buffer):
+        """Gère l'affichage/masquage du placeholder"""
+        text = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True).strip()
+        if self.lbl_placeholder:
+            self.lbl_placeholder.set_visible(len(text) == 0)
+
     def _on_translate(self, *_):
-        intent = self.txt_input.get_buffer().get_text(self.txt_input.get_buffer().get_start_iter(), self.txt_input.get_buffer().get_end_iter(), True).strip()
-        if not intent: return
+        intent = self.txt_input.get_buffer().get_text(
+            self.txt_input.get_buffer().get_start_iter(), 
+            self.txt_input.get_buffer().get_end_iter(), True
+        ).strip()
         
-        self.lbl_result.set_text("Génération en cours...")
+        if not intent: 
+            self.terminal_panel._log("❌ Veuillez décrire une action.")
+            return
+            
+        self.lbl_result.set_text("Recherche dans le cache...")
         self.btn_exec.set_sensitive(False)
         
+        # Détection simple de mode "Processus" (si l'utilisateur utilise des mots clés comme "liste", "puis", "et ensuite")
+        process_keywords = ["liste", "processus", "étapes", "puis", "ensuite", "et"]
+        self.is_process_mode = any(kw in intent.lower() for kw in process_keywords)
+
         def _thread():
-            cmd = self.terminal_panel.ai_engine.process_modification("shell", "", intent, mode="terminal_gen")
-            if cmd:
-                GLib.idle_add(lambda: (self.lbl_result.set_text(f"$ {cmd}"), self.btn_exec.set_sensitive(True), setattr(self, 'generated_cmd', cmd)))
+            # 1. Vérifier le cache
+            cached = get_cached_command(intent)
+            
+            if cached:
+                cmd = cached["command"]
+                source = "Cache DB ✅"
+                GLib.idle_add(lambda: self.terminal_panel._log(f"📂 Commande récupérée depuis la base de données ({source})"))
             else:
-                GLib.idle_add(lambda: (self.lbl_result.set_text("❌ Échec de la génération."), self.btn_exec.set_sensitive(False)))
-        
+                # 2. Si pas dans le cache, appeler l'IA
+                GLib.idle_add(lambda: self.lbl_result.set_text("Génération IA en cours..."))
+                mode = "terminal_gen"
+                # Si c'est un processus, on demande à l'IA de retourner une liste séparée par && ou ;
+                if self.is_process_mode:
+                    prompt_suffix = " (Retourne une seule ligne de commande chaînée avec && ou ;)"
+                else:
+                    prompt_suffix = ""
+                    
+                cmd = self.terminal_panel.ai_engine.process_modification(
+                    "shell", "", intent + prompt_suffix, mode="terminal_gen"
+                )
+                
+                if cmd:
+                    # Sauvegarder dans le cache
+                    save_command_to_cache(intent, cmd, self.is_process_mode)
+                    source = "IA 🤖"
+                    GLib.idle_add(lambda: self.terminal_panel._log(f"💾 Nouvelle commande générée et sauvegardée ({source})"))
+                else:
+                    GLib.idle_add(lambda: (
+                        self.lbl_result.set_text("❌ Échec de la génération."), 
+                        self.btn_exec.set_sensitive(False)
+                    ))
+                    return
+
+            # Affichage du résultat
+            display_cmd = cmd.replace("&&", "\n&& ").replace(";", "\n; ") if self.is_process_mode else cmd
+            GLib.idle_add(lambda: (
+                self.lbl_result.set_text(f"$ {display_cmd}"), 
+                self.btn_exec.set_sensitive(True), 
+                setattr(self, 'generated_cmd', cmd)
+            ))
+            
+            # Auto-Run si activé
+            if self.switch_auto_run.get_active():
+                GLib.idle_add(lambda: self._on_execute(None))
+
         threading.Thread(target=_thread, daemon=True).start()
 
     def _on_execute(self, *_):
         if hasattr(self, 'generated_cmd') and self.generated_cmd:
+            # Si c'est un processus, on loggue chaque étape
+            if self.is_process_mode:
+                steps = [s.strip() for s in self.generated_cmd.replace("&&", ";").split(";") if s.strip()]
+                self.terminal_panel._log(f"🚀 Lancement du processus ({len(steps)} étapes)...")
+            
             self.terminal_panel._run_custom_command_text(self.generated_cmd)
-            self.destroy()
-
+            # On ne ferme pas forcément le dialogue pour voir le résultat
 class GitManagerDialog(Gtk.Dialog):
     def __init__(self, parent, project_root, log_callback):
         super().__init__(title="🐙 Mini GitHub Desktop", transient_for=parent, default_width=700, default_height=600)
@@ -1984,15 +2236,30 @@ class BusinessProcessDialog(Gtk.Dialog):
             "Expert Linux": "Tu es un administrateur système Linux et DevOps expert. Tu fournis des commandes shell optimisées. Réponds UNIQUEMENT avec un objet JSON : {'commande': '...', 'explication': '...', 'avertissements': '...'}.",
             "Expert en astuce en informatique": "Tu es un guru de l'informatique. Tu donnes des astuces et solutions ingénieuses. Réponds UNIQUEMENT avec un objet JSON : {'astuce': '...', 'contexte_utilisation': '...', 'gain_estime': '...'}."
         }
-        
+
         content = self.get_content_area()
         content.set_spacing(12)
         set_margins(content, 16)
+
+        # --- Header avec Switch Auto-Copy ---
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        header_box.append(Gtk.Label(label="1. Choisissez le rôle de l'IA :", xalign=0, css_classes=["heading"]))
         
-        # --- Section 1: Choix du Rôle ---
-        content.append(Gtk.Label(label="1. Choisissez le rôle de l'IA :", xalign=0, css_classes=["heading"]))
+        spacer = Gtk.Box(hexpand=True)
+        header_box.append(spacer)
+        
+        self.switch_auto_copy = Gtk.Switch()
+        self.switch_auto_copy.set_tooltip_text("Copier automatiquement le résultat JSON dans le presse-papiers")
+        lbl_auto = Gtk.Label(label="⚡ Auto-Copy", css_classes=["dim-label"])
+        
+        auto_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        auto_box.append(lbl_auto)
+        auto_box.append(self.switch_auto_copy)
+        header_box.append(auto_box)
+        
+        content.append(header_box)
+
         role_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        
         self.combo_role = Gtk.ComboBoxText()
         self.combo_role.set_hexpand(True)
         for role_name in self.default_roles.keys():
@@ -2008,13 +2275,12 @@ class BusinessProcessDialog(Gtk.Dialog):
                 self.combo_role.append_text(role_name)
                 
         role_box.append(self.combo_role)
-        
         btn_add_role = Gtk.Button(label="➕ Ajouter un rôle")
         btn_add_role.add_css_class("ctrl-btn")
         btn_add_role.connect("clicked", self._open_add_role_dialog)
         role_box.append(btn_add_role)
-        
         content.append(role_box)
+        
         content.append(Gtk.Separator(margin_top=8, margin_bottom=8))
 
         # --- Section 2: Demande ---
@@ -2026,14 +2292,15 @@ class BusinessProcessDialog(Gtk.Dialog):
         self.txt_problem.set_wrap_mode(Gtk.WrapMode.WORD)
         scroll_in.set_child(self.txt_problem)
         content.append(scroll_in)
-        
+
         btn_generate = Gtk.Button(label="🤖 Générer la réponse (JSON)")
         btn_generate.add_css_class("suggested-action")
         btn_generate.set_halign(Gtk.Align.END)
         btn_generate.connect("clicked", self._on_generate)
         content.append(btn_generate)
+
         content.append(Gtk.Separator(margin_top=8, margin_bottom=8))
-        
+
         # --- Section 3: Résultat ---
         content.append(Gtk.Label(label="3. Résultat (JSON Strict) :", xalign=0, css_classes=["heading"]))
         scroll_out = Gtk.ScrolledWindow()
@@ -2046,7 +2313,7 @@ class BusinessProcessDialog(Gtk.Dialog):
         self.txt_result.add_css_class("code-editor")
         scroll_out.set_child(self.txt_result)
         content.append(scroll_out)
-        
+
         action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, halign=Gtk.Align.END, margin_top=8)
         btn_copy = Gtk.Button(label="📋 Copier")
         btn_copy.connect("clicked", self._copy_result)
@@ -2074,11 +2341,8 @@ class BusinessProcessDialog(Gtk.Dialog):
         scroll_prompt = Gtk.ScrolledWindow()
         scroll_prompt.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll_prompt.set_size_request(-1, 120)
-        
         text_prompt = Gtk.TextView()
         text_prompt.set_wrap_mode(Gtk.WrapMode.WORD)
-        # La ligne set_placeholder_text a été supprimée car elle n'existe pas pour Gtk.TextView dans GTK4
-        
         scroll_prompt.set_child(text_prompt)
         content.append(scroll_prompt)
         
@@ -2089,7 +2353,7 @@ class BusinessProcessDialog(Gtk.Dialog):
         btn_box.append(btn_cancel)
         btn_box.append(btn_save)
         content.append(btn_box)
-        
+
         def on_save(*_):
             name = entry_name.get_text().strip()
             prompt = text_prompt.get_buffer().get_text(
@@ -2100,7 +2364,7 @@ class BusinessProcessDialog(Gtk.Dialog):
             if not name or not prompt:
                 self.log_callback("❌ Le nom et le prompt sont requis.")
                 return
-                
+            
             if name in self.default_roles or name in self.custom_roles:
                 self.log_callback(f"❌ Le rôle '{name}' existe déjà.")
                 return
@@ -2116,14 +2380,16 @@ class BusinessProcessDialog(Gtk.Dialog):
                 
             self.log_callback(f"✅ Rôle '{name}' ajouté avec succès.")
             dialog.destroy()
-            
+
         btn_save.connect("clicked", on_save)
         dialog.present()
+
     def _on_generate(self, *_):
         problem = self.txt_problem.get_buffer().get_text(
             self.txt_problem.get_buffer().get_start_iter(),
             self.txt_problem.get_buffer().get_end_iter(), True
         ).strip()
+        
         if not problem:
             self.log_callback("❌ Veuillez décrire votre demande.")
             return
@@ -2131,26 +2397,56 @@ class BusinessProcessDialog(Gtk.Dialog):
         active_text = self.combo_role.get_active_text()
         selected_role_prompt = self.default_roles.get(active_text) or self.custom_roles.get(active_text, "Tu es un assistant IA polyvalent. Réponds UNIQUEMENT en format JSON.")
         
-        self.log_callback(f"🤖 Génération en cours avec le rôle : {active_text} (Sortie JSON obligatoire)...")
-        self.txt_result.get_buffer().set_text("Génération en cours...")
+        self.txt_result.get_buffer().set_text("Recherche dans le cache...")
         
         def _thread():
-            result = self.ai_engine.process_modification(
-                "business_process",
-                "Contexte: Demande utilisateur",
-                problem,
-                mode="business_process", # Force le format JSON strict et le nettoyage du chunk
-                custom_role=selected_role_prompt
-            )
-            if result:
-                # Nettoyage garanti des balises markdown ```json par le parseur
-                clean_result = self.ai_engine._clean_json_output(result)
-                GLib.idle_add(lambda: self.txt_result.get_buffer().set_text(clean_result))
-                GLib.idle_add(lambda: self.log_callback(f"📊 RÉPONSE GÉNÉRÉE (Rôle: {active_text}, Format: JSON)."))
+            # 1. Vérifier le cache spécifique aux processus JSON
+            cached = get_cached_process(problem)
+            
+            if cached:
+                result = cached["json_content"]
+                GLib.idle_add(lambda: self.log_callback(f"📂 Réponse récupérée depuis la DB (Cache Processus)"))
             else:
-                GLib.idle_add(lambda: self.txt_result.get_buffer().set_text("❌ Échec de la génération IA."))
-                GLib.idle_add(lambda: self.log_callback("❌ Échec de la génération."))
+                # 2. Appel IA
+                GLib.idle_add(lambda: self.txt_result.get_buffer().set_text("Génération IA en cours..."))
+                result = self.ai_engine.process_modification(
+                    "business_process",
+                    "Contexte: Demande utilisateur",
+                    problem,
+                    mode="business_process",
+                    custom_role=selected_role_prompt
+                )
                 
+                if result:
+                    save_process_to_cache(problem, result, role_type=active_text)
+                    GLib.idle_add(lambda: self.log_callback(f"💾 Nouvelle réponse sauvegardée (Cache Processus)"))
+                else:
+                    GLib.idle_add(lambda: (self.txt_result.get_buffer().set_text("❌ Échec."), self.log_callback("❌ Échec.")))
+                    return
+
+            clean_result = self.ai_engine._clean_json_output(result)
+            GLib.idle_add(lambda: self.txt_result.get_buffer().set_text(clean_result))
+            GLib.idle_add(lambda: self.log_callback(f"📊 RÉPONSE GÉNÉRÉE (Rôle: {active_text})."))
+            
+            if self.switch_auto_copy.get_active():
+                GLib.idle_add(lambda: (
+                    Gdk.Display.get_default().get_clipboard().set(clean_result),
+                    self.log_callback("📋 Résultat copié automatiquement.")
+                ))
+                
+            # Nettoyage garanti des balises markdown ```json par le parseur
+            clean_result = self.ai_engine._clean_json_output(result)
+            
+            GLib.idle_add(lambda: self.txt_result.get_buffer().set_text(clean_result))
+            GLib.idle_add(lambda: self.log_callback(f"📊 RÉPONSE GÉNÉRÉE (Rôle: {active_text}, Format: JSON)."))
+            
+            # Auto-Copy si activé
+            if self.switch_auto_copy.get_active():
+                GLib.idle_add(lambda: (
+                    Gdk.Display.get_default().get_clipboard().set(clean_result),
+                    self.log_callback("📋 Résultat copié automatiquement dans le presse-papiers.")
+                ))
+
         threading.Thread(target=_thread, daemon=True).start()
 
     def _copy_result(self, *_):
@@ -2158,9 +2454,16 @@ class BusinessProcessDialog(Gtk.Dialog):
             self.txt_result.get_buffer().get_start_iter(),
             self.txt_result.get_buffer().get_end_iter(), True
         ).strip()
+        
         if text and text != "Génération en cours..." and not text.startswith("❌"):
             Gdk.Display.get_default().get_clipboard().set(text)
-            self.log_callback("✅ Résultat JSON copié dans le presse-papiers.")# ═══════════════════════════════════════════════════════════════════════
+            self.log_callback("✅ Résultat JSON copié dans le presse-papiers.")
+            
+            
+            
+            
+            
+# ═══════════════════════════════════════════════════════════════════════
 #  WIDGETS
 # ═══════════════════════════════════════════════════════════════════════
 TYPE_ICONS = {"import": "📦", "class": "🏛", "function": "⚡", "separator": "─", "comment": "💬", "other": "▪", "template": "🌐", "template_part": "🌐", "django_block": "🧩", "style": "🎨", "style_rule": "🎨", "script": "⚙️", "script_block": "⚡", "c_block": "⚙️"}
