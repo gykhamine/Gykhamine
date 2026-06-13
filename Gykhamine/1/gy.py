@@ -120,7 +120,7 @@ def get_env_value(key: str, default: str = "") -> str:
     Lit un fichier .env externe pour récupérer une variable.
     Utilise 'with' pour une gestion propre des fichiers.
     """
-    env_path = Path("/run/media/gykhamine/GY/Gykhamine/gy/.env")
+    env_path = Path(".env")
     if not env_path.exists():
         return default
     try:
@@ -177,72 +177,97 @@ if not auto_mount_gy():
     print("⚠️ Le montage automatique a échoué. L'application va continuer mais certains chemins GY peuvent être inaccessibles.")
     
 # 2. Définition des valeurs par défaut uniquement
+BASE_PATH = "/run/media/gykhamine/GY/GS-CODE/"
+
 DEFAULT_CONFIG = {
-    "llama_server_path": "/run/media/gykhamine/GY/gysingner/llama-server",
-    "llama_model_path":  "/run/media/gykhamine/GY/gysingner/models/gysingner.gguf",
-    "llama_host":        "127.0.0.1",
-    "llama_port":        8080,
-    "gunicorn_bind":     "0.0.0.0:8000",
+    # LLaMA Server
+    "llama_server_path": os.path.join(BASE_PATH, "gysingner/llama-server"),
+    "llama_model_path": os.path.join(BASE_PATH, "gysingner/models/gysingner.gguf"),
+    "llama_host": "127.0.0.1",
+    "llama_port": 8080,
+    
+    # Gunicorn
+    "gunicorn_bind": "0.0.0.0:8000",
     "gunicorn_ssl_enabled": False,
-    "gunicorn_ssl_cert_path": os.path.expanduser("/run/media/gykhamine/GY/ssl/cert.pem"),
-    "gunicorn_ssl_key_path": os.path.expanduser("/run/media/gykhamine/GY/ssl/key.pem"),
-    "last_project":      "",
-    "last_projects":     [], 
-    "theme":             "dark",
+    "gunicorn_ssl_cert_path": os.path.join(BASE_PATH, "ssl/cert.pem"),
+    "gunicorn_ssl_key_path": os.path.join(BASE_PATH, "ssl/key.pem"),
+    
+    # Projets
+    "last_project": "",
+    "last_projects": [],
+    
+    # Interface
+    "theme": "dark",
     "open_browser_on_run": False,
+    
+    # Ports
     "auto_find_free_port": True,
     "default_port_range_start": 8000,
     "default_port_range_end": 8010,
-    "log_file_path":     os.path.expanduser("/run/media/gykhamine/GY/logs/studio.log"),
-    "db_path":           os.path.expanduser("/run/media/gykhamine/GY/db/gykhamine_studio.db"),
-    "pg_device":         get_env_value("PG_PARTITION_UUID", get_env_value("PG_PARTITION_UUID", "UUID=16815455-ad07-4bc6-a9f9-ee9f0b0a6246")),  # Remplacez par le vrai UUID de sdb3
-    "pg_mount_point":    "/var/lib/pgsql/data",
-    "pg_db_name":        "ma_base",
-    "pg_db_user":        "mon_user",
-    "pg_db_password":    "mot_de_passe",
-    "pg_bind_ip":        "127.0.0.1",
-    "redis_mode":        "local",
-    "redis_ip":          "127.0.0.1",
-    "redis_port":        6379,
-    "redis_data_dir":    os.path.expanduser("/run/media/gykhamine/GY/data_redis/"),
+    
+    # Logs et Base de données
+    "log_file_path": os.path.join(BASE_PATH, "logs/studio.log"),
+    "db_path": os.path.join(BASE_PATH, "db/gykhamine_studio.db"),
+    
+    # PostgreSQL
+    "pg_device": get_env_value("PG_PARTITION_UUID", "UUID=16815455-ad07-4bc6-a9f9-ee9f0b0a6246"),
+    "pg_mount_point": "/var/lib/pgsql/data",
+    "pg_db_name": "ma_base",
+    "pg_db_user": "mon_user",
+    "pg_db_password": "mot_de_passe",
+    "pg_bind_ip": "127.0.0.1",
+    
+    # Redis
+    "redis_mode": "local",
+    "redis_ip": "127.0.0.1",
+    "redis_port": 6379,
+    "redis_data_dir": os.path.join(BASE_PATH, "data_redis/"),
     "redis_use_persistence": True,
-    "redis_env_path":    "/run/media/gykhamine/GY/Gykhamine/gy/.env",
-    "redis_update_env":  False,
-    "nfs_server_mode":   "local",
-    "nfs_export_dir":    "/run/media/gykhamine/GY/gy/media",
-    "nfs_lan_network":   "192.168.1.0/24",
-    "nfs_client_server_ip":   "192.168.1.10",
-    "nfs_client_export_dir":  "/srv/nfs",
+    "redis_env_path": os.path.join(BASE_PATH, "Gykhamine/gy/.env"),
+    "redis_update_env": False,
+    
+    # NFS
+    "nfs_server_mode": "local",
+    "nfs_export_dir": os.path.join(BASE_PATH, "gy/media"),
+    "nfs_lan_network": "192.168.1.0/24",
+    "nfs_client_server_ip": "192.168.1.10",
+    "nfs_client_export_dir": "/srv/nfs",
     "nfs_client_mount_point": os.path.expanduser("~/nfs_mount"),
-    "nginx_conf_path":        "/etc/nginx/nginx.conf",
-    "nginx_mode":             "reverse_proxy",
-    "nginx_server_name":      "localhost",
-    "nginx_listen_port":      "443",
-    "nginx_upstream_name":    "gunicorn",
+    
+    # Nginx
+    "nginx_conf_path": "/etc/nginx/nginx.conf",
+    "nginx_mode": "reverse_proxy",
+    "nginx_server_name": "localhost",
+    "nginx_listen_port": "443",
+    "nginx_upstream_name": "gunicorn",
     "nginx_upstream_servers": "127.0.0.1:8000, 127.0.0.1:8001, 127.0.0.1:8002",
-    "nginx_proxy_pass":       "http://gunicorn",
-    "nginx_force_https":      True,
-    "nginx_ssl_cert":         "/etc/pki/nginx/server.crt",
-    "nginx_ssl_key":          "/etc/pki/nginx/private/server.key",
-    "nginx_static_url":       "/static/",
-    "nginx_static_path":      "/run/media/gykhamine/GY/file/statics/",
-    "nginx_media_url":        "/media/",
-    "nginx_media_path":       "/run/media/gykhamine/GY/file/media/",
-    "nginx_max_body":         "20M",
-    "nginx_read_timeout":     "60s",
-    "nginx_connect_timeout":  "60s",
-    "nginx_proxy_buffering":  True,
+    "nginx_proxy_pass": "http://gunicorn",
+    "nginx_force_https": True,
+    "nginx_ssl_cert": "/etc/pki/nginx/server.crt",
+    "nginx_ssl_key": "/etc/pki/nginx/private/server.key",
+    "nginx_static_url": "/static/",
+    "nginx_static_path": os.path.join(BASE_PATH, "file/statics/"),
+    "nginx_media_url": "/media/",
+    "nginx_media_path": os.path.join(BASE_PATH, "file/media/"),
+    "nginx_max_body": "20M",
+    "nginx_read_timeout": "60s",
+    "nginx_connect_timeout": "60s",
+    "nginx_proxy_buffering": True,
     "nginx_security_headers": True,
     "nginx_custom_redirects": "/ancien -> /nouveau\n",
-    "ssh_server_mode":       "local",
-    "ssh_server_port":       22,
-    "ssh_client_host":       "192.168.1.10",
-    "ssh_client_port":       22,
-    "ssh_client_user":       "root",
-    "ssh_client_key":        os.path.expanduser("/run/media/gykhamine/GY/.ssh/id_rsa"),
-    "ssh_client_auth_mode":  "key",
-    "venv_name":             "venv",
-    "venv_path":             "",
+    
+    # SSH
+    "ssh_server_mode": "local",
+    "ssh_server_port": 22,
+    "ssh_client_host": "192.168.1.10",
+    "ssh_client_port": 22,
+    "ssh_client_user": "root",
+    "ssh_client_key": os.path.join(BASE_PATH, ".ssh/id_rsa"),
+    "ssh_client_auth_mode": "key",
+    
+    # Virtual Environment
+    "venv_name": "venv",
+    "venv_path": "",
 }
 # ═══════════════════════════════════════════════════════════════════════
 #  SQLITE ENGINE — CONFIG + SMART MEMORY + LOGS
