@@ -556,27 +556,66 @@ def _find_if_else_chain_end(lines: list, start_idx: int) -> int:
     return len(lines) - 1
 
 def _find_brace_or_stmt_end(lines: list, start_idx: int) -> int:
-    """Trouve la fin d'un bloc délimité par des accolades {} ou d'une instruction simple."""
+    """
+    Trouve la fin d'un bloc délimité par des accolades {} en ignorant 
+    les accolades présentes dans les chaînes de caractères et les commentaires.
+    """
     depth = 0
     found_open = False
+    in_single_quote = False
+    in_double_quote = False
+    in_backtick = False
+    in_line_comment = False
+    in_block_comment = False
     
     for i in range(start_idx, len(lines)):
         line = lines[i]
-        # On compte les accolades en ignorant celles qui sont dans des chaînes (approximatif)
-        for char in line:
-            if char == '{':
-                depth += 1
-                found_open = True
-            elif char == '}':
-                depth -= 1
-                
-        if found_open and depth == 0:
-            return i
+        j = 0
+        while j < len(line):
+            char = line[j]
+            next_char = line[j+1] if j + 1 < len(line) else ''
             
-    # Si pas d'accolade trouvée, on considère que c'est une instruction simple sur une ligne
-    # ou on prend jusqu'à la prochaine déclaration majeure
-    return start_idx
-
+            # Gestion des commentaires
+            if not in_single_quote and not in_double_quote and not in_backtick:
+                if not in_block_comment and char == '/' and next_char == '/':
+                    in_line_comment = True
+                if not in_line_comment and char == '/' and next_char == '*':
+                    in_block_comment = True
+                    j += 1 # Sauter le *
+                if in_block_comment and char == '*' and next_char == '/':
+                    in_block_comment = False
+                    j += 1 # Sauter le /
+            
+            # Gestion des chaînes de caractères
+            if not in_line_comment and not in_block_comment:
+                if char == '\\' and (in_single_quote or in_double_quote or in_backtick):
+                    j += 1 # Sauter le caractère échappé
+                    continue
+                
+                if char == "'" and not in_double_quote and not in_backtick:
+                    in_single_quote = not in_single_quote
+                elif char == '"' and not in_single_quote and not in_backtick:
+                    in_double_quote = not in_double_quote
+                elif char == '`' and not in_single_quote and not in_double_quote:
+                    in_backtick = not in_backtick
+                
+                # Comptage des accolades uniquement si on n'est ni dans une chaîne ni dans un commentaire
+                if not in_single_quote and not in_double_quote and not in_backtick:
+                    if char == '{':
+                        depth += 1
+                        found_open = True
+                    elif char == '}':
+                        depth -= 1
+                        if found_open and depth == 0:
+                            return i
+            
+            j += 1
+        
+        # Fin de ligne : reset du commentaire ligne
+        in_line_comment = False
+        
+    # Si on arrive ici, c'est qu'on n'a pas trouvé la fermeture correspondante
+    return len(lines) - 1    
 
 
 
@@ -1084,194 +1123,129 @@ def _parse_css_blocks(code: str, file_path: str) -> list[dict]:
 
 
 def _parse_js_blocks(code: str, file_path: str) -> list[dict]:
-    """Parseur JS optimisé : Chaînes if/else fusionnées, indentation préservée."""
+    """Parseur JS robuste : Se concentre uniquement sur les fonctions, classes et exports majeurs via les accolades."""
     lines = code.splitlines(keepends=True)
     blocks = []
     i = 0
+    
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
-        if not stripped:
+        
+        if not stripped or stripped.startswith('//'):
             i += 1
             continue
-        
-        is_class = re.match(r'^(export\s+)?class\s+(\w+)', stripped)
-        # Regex plus robuste pour les fonctions et variables
-        is_func = re.match(r'^(export\s+)?(async\s+)?function\s+(\w+)|^(export\s+)?(const|let|var)\s+(\w+)\s*=\s*(async\s+)?(?:function|\([^)]*\)\s*=>)', stripped)
-        is_if = re.match(r'^(if|else\s+if|else|try|catch|finally)\b', stripped, re.IGNORECASE)
-        is_import = re.match(r'^import\s+', stripped)
-        is_export = re.match(r'^export\s+(?!default\s+(class|function))', stripped)
-
-        if is_if:
-            end_idx = _find_if_else_chain_end(lines, i)
-            blocks.append({
-                "type": "logic_block",
-                "name": "Condition / Flux de contrôle",
-                "code": "".join(lines[i:end_idx + 1]),
-                "start": i,
-                "end": end_idx,
-                "children": []
-            })
-            i = end_idx + 1
-            continue
             
-        elif is_class or is_func or is_import or is_export:
+        # Détection des structures principales
+        is_class = re.match(r'^(export\s+)?(default\s+)?class\s+(\w+)', stripped)
+        # Match function declaration or arrow function assignment
+        is_func = re.match(r'^(export\s+)?(default\s+)?(async\s+)?function\s+(\w+)|^(export\s+)?(const|let|var)\s+(\w+)\s*=\s*(async\s+)?(?:function|\([^)]*\)\s*=>|\w+\s*=>)', stripped)
+        is_export_default = re.match(r'^export\s+default\s+', stripped)
+        
+        start_idx = -1
+        name = "Anonymous"
+        btype = "other"
+        
+        if is_class:
+            start_idx = i
+            name = is_class.group(3)
+            btype = "class"
+        elif is_func:
+            start_idx = i
+            if is_func.group(4): name = is_func.group(4) # Named function
+            elif is_func.group(6): name = is_func.group(6) # Variable assignment
+            btype = "function"
+        elif is_export_default and ('{' in stripped or 'function' in stripped or 'class' in stripped):
+             # Cas export default { ... } ou export default function...
+             start_idx = i
+             name = "Default Export"
+             btype = "other"
+
+        if start_idx != -1:
+            # Chercher l'accolade ouvrante
             brace_idx = -1
-            for k in range(i, min(i + 5, len(lines))):
+            for k in range(i, min(i + 20, len(lines))):
                 if '{' in lines[k]:
                     brace_idx = k
                     break
             
-            name = "Anonymous"
-            btype = "other"
-            
-            if is_class:
-                name = is_class.group(2)
-                btype = "class"
-            elif is_func:
-                # Extraction sécurisée du nom
-                if is_func.group(3): name = is_func.group(3) # function name()
-                elif is_func.group(5): name = is_func.group(5) # const name = ...
-                elif is_func.group(7): name = "Anonymous"
-                btype = "function"
-            elif is_import:
-                name = "Imports"
-                btype = "import"
-            elif is_export:
-                name = "Export"
-                btype = "other"
-
             if brace_idx != -1:
                 end_idx = _find_brace_or_stmt_end(lines, brace_idx)
-            else:
-                end_idx = i
-                while end_idx + 1 < len(lines) and not lines[end_idx + 1].strip().startswith(('import', 'export', 'class', 'function', 'const', 'let', 'var', '//', '/*')):
-                    if is_import or is_export:
-                        end_idx += 1
-                    else:
-                        break
-
-            blocks.append({
-                "type": btype,
-                "name": name,
-                "code": "".join(lines[i:end_idx + 1]),
-                "start": i,
-                "end": end_idx,
-                "children": []
-            })
-            i = end_idx + 1
-        else:
-            end_idx = i
-            while end_idx + 1 < len(lines):
-                next_stripped = lines[end_idx + 1].strip()
-                if next_stripped and re.match(r'^(class|function|const|let|var|import|export|if|else|try|catch)\s+', next_stripped, re.IGNORECASE):
-                    break
-                end_idx += 1
-            blocks.append({
-                "type": "other",
-                "name": "Bloc de code",
-                "code": "".join(lines[i:end_idx + 1]),
-                "start": i,
-                "end": end_idx,
-                "children": []
-            })
-            i = end_idx + 1
-    return blocks    
-
+                raw_code = "".join(lines[start_idx:end_idx + 1])
+                
+                blocks.append({
+                    "type": btype,
+                    "name": name,
+                    "code": raw_code,
+                    "start": start_idx,
+                    "end": end_idx,
+                    "children": []
+                })
+                i = end_idx + 1
+                continue
+        
+        i += 1
+        
+    return blocks
 
 def _parse_c_blocks(code: str, file_path: str) -> list[dict]:
-    """Parseur C/C++ optimisé : Chaînes if/else fusionnées, indentation préservée."""
+    """Parseur C/C++ robuste : Se concentre uniquement sur les fonctions, structs et classes via les accolades."""
     lines = code.splitlines(keepends=True)
     blocks = []
     i = 0
+    
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
-        if not stripped:
+        
+        if not stripped or stripped.startswith('//') or stripped.startswith('/*'):
             i += 1
             continue
-        
-        is_class_struct = re.match(r'^(class|struct|enum|namespace)\s+(\w+)', stripped)
-        is_func = re.match(r'^(void|int|char|float|double|bool|auto|unsigned|signed|long|short|size_t|struct|enum|class)\s+\w+\s*\(', stripped)
-        is_if = re.match(r'^(if|else\s+if|else|try|catch|finally)\b', stripped, re.IGNORECASE)
-        is_include = re.match(r'^#\s*include', stripped)
-        is_define = re.match(r'^#\s*define', stripped)
-
-        if is_if:
-            end_idx = _find_if_else_chain_end(lines, i)
-            blocks.append({
-                "type": "logic_block",
-                "name": "Condition / Flux de contrôle",
-                "code": "".join(lines[i:end_idx + 1]),
-                "start": i,
-                "end": end_idx,
-                "children": []
-            })
-            i = end_idx + 1
-            continue
             
-        elif is_class_struct or is_func or is_include or is_define:
+        # Détection des structures principales
+        is_struct_class = re.match(r'^(typedef\s+)?(struct|class|enum|union|namespace)\s+(\w*)', stripped)
+        # Fonction C classique : type nom(...)
+        is_func = re.match(r'^(void|int|char|float|double|bool|auto|unsigned|signed|long|short|size_t|ssize_t|uint\d+_t|int\d+_t|struct\s+\w+)\s+\**\s*(\w+)\s*\(', stripped)
+        
+        start_idx = -1
+        name = "Unknown"
+        btype = "other"
+        
+        if is_struct_class:
+            start_idx = i
+            name = is_struct_class.group(3) if is_struct_class.group(3) else "Anonymous"
+            btype = "class" # On groupe struct/class/enum sous "class" pour l'icône
+        elif is_func:
+            start_idx = i
+            name = is_func.group(2)
+            btype = "function"
+            
+        if start_idx != -1:
+            # Chercher l'accolade ouvrante
             brace_idx = -1
-            for k in range(i, min(i + 5, len(lines))):
+            for k in range(i, min(i + 20, len(lines))):
                 if '{' in lines[k]:
                     brace_idx = k
                     break
             
-            name = "Unknown"
-            btype = "other"
-
-            if is_class_struct:
-                name = is_class_struct.group(2)
-                btype = "class"
-            elif is_func:
-                # Extraction sécurisée du nom de fonction C
-                match_name = re.search(r'\w+\s*\(', stripped)
-                if match_name:
-                    name = match_name.group(0).replace('(', '').strip()
-                else:
-                    name = "Function"
-                btype = "function"
-            elif is_include:
-                name = "Include"
-                btype = "import"
-            elif is_define:
-                name = "Define"
-                btype = "other"
-
             if brace_idx != -1:
                 end_idx = _find_brace_or_stmt_end(lines, brace_idx)
-            else:
-                end_idx = i
-                while end_idx + 1 < len(lines) and not lines[end_idx + 1].strip().startswith(('class', 'struct', 'enum', 'namespace', 'void', 'int', 'char', 'float', 'double', 'bool', 'auto', '#', 'if', 'else')):
-                    end_idx += 1
-
-            blocks.append({
-                "type": btype,
-                "name": name,
-                "code": "".join(lines[i:end_idx + 1]),
-                "start": i,
-                "end": end_idx,
-                "children": []
-            })
-            i = end_idx + 1
-        else:
-            end_idx = i
-            while end_idx + 1 < len(lines):
-                next_stripped = lines[end_idx + 1].strip()
-                if next_stripped and re.match(r'^(class|struct|enum|namespace|void|int|char|float|double|bool|auto|unsigned|signed|long|short|size_t|#|if|else)\s*', next_stripped, re.IGNORECASE):
-                    break
-                end_idx += 1
-            blocks.append({
-                "type": "other",
-                "name": "Bloc de code",
-                "code": "".join(lines[i:end_idx + 1]),
-                "start": i,
-                "end": end_idx,
-                "children": []
-            })
-            i = end_idx + 1
-    return blocks
-    
+                raw_code = "".join(lines[start_idx:end_idx + 1])
+                
+                blocks.append({
+                    "type": btype,
+                    "name": name,
+                    "code": raw_code,
+                    "start": start_idx,
+                    "end": end_idx,
+                    "children": []
+                })
+                i = end_idx + 1
+                continue
+        
+        i += 1
+        
+    return blocks    
 def parse_blocks(code: str, file_path: str = "") -> list[dict]:
     ext = Path(file_path).suffix.lower()
     if ext in ('.html', '.jinja', '.jinja2', '.htm'): return _parse_template_blocks(code, file_path)
