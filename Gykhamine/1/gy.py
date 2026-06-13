@@ -467,144 +467,195 @@ def _find_matching_brace(lines, start_idx):
 
 
 
-def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
-    """
-    Parseur Python optimisé : Respect strict de l'indentation, 
-    regroupement des attributs de classe, et suppression du sur-découpage interne.
-    """
-    lines = code.splitlines(keepends=True)
-    blocks = []
 
-    def get_indent(line: str) -> int:
-        # Calcule l'indentation réelle (espaces + tabulations)
-        return len(line) - len(line.lstrip(' \t'))
 
-    def find_block_end(start_idx: int, base_indent: int) -> int:
-        """Trouve la fin d'un bloc en se basant strictement sur l'indentation."""
-        for i in range(start_idx + 1, len(lines)):
-            line = lines[i]
-            stripped = line.strip()
-            if not stripped:
-                continue # Ignore les lignes vides pour le calcul d'indentation
-            current_indent = get_indent(line)
-            if current_indent <= base_indent:
-                return i - 1
-        return len(lines) - 1
 
-    i = 0
+
+
+
+
+def _get_indent(line: str) -> int:
+    """Calcule l'indentation réelle (espaces + tabulations)"""
+    return len(line) - len(line.lstrip(' \t'))
+
+def _get_decorator_start(lines: list, idx: int) -> int:
+    """Remonte les lignes pour trouver le début de la chaîne de décorateurs"""
+    start = idx
+    for k in range(idx - 1, -1, -1):
+        stripped = lines[k].strip()
+        if stripped.startswith('@'):
+            start = k
+        elif stripped == '' or stripped.startswith('#'):
+            continue # Ignore les lignes vides ou commentaires entre le décorateur et la def
+        else:
+            break # On a touché un autre code, on s'arrête
+    return start
+
+def _find_function_end(lines: list, start_idx: int, base_indent: int) -> int:
+    """Trouve la fin d'une fonction ou classe, en partant de la ligne de définition (pas du décorateur)."""
+    i = start_idx + 1
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
-
         if not stripped:
             i += 1
             continue
+        current_indent = _get_indent(line)
+        # Dès qu'on retombe au niveau d'indentation de la fonction/classe, le bloc est fini
+        if current_indent <= base_indent:
+            return i - 1
+        i += 1
+    return len(lines) - 1
 
-        current_indent = get_indent(line)
+def _find_control_flow_end(lines: list, start_idx: int, base_indent: int, allow_continuations: bool = False) -> int:
+    """Trouve la fin d'un bloc en se basant strictement sur l'indentation."""
+    continuations = {'elif', 'else', 'except', 'finally'}
+    i = start_idx + 1
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped:
+            i += 1
+            continue
+        current_indent = _get_indent(line)
+        if current_indent < base_indent:
+            return i - 1
+        elif current_indent == base_indent:
+            is_continuation = any(stripped.startswith(kw) for kw in continuations)
+            if not allow_continuations or not is_continuation:
+                return i - 1
+        i += 1
+    return len(lines) - 1
 
-        # Détection des structures racines
+
+
+
+def _find_if_else_chain_end(lines: list, start_idx: int) -> int:
+    """Trouve la fin d'une chaîne if/else if/else ou try/catch/finally en JS/C."""
+    base_indent = _get_indent(lines[start_idx])
+    i = start_idx + 1
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped:
+            i += 1
+            continue
+        
+        current_indent = _get_indent(line)
+        
+        # Si on revient à l'indentation de base ou moins, c'est fini
+        if current_indent <= base_indent:
+            # Vérifier si c'est une continuation valide (else, catch, finally)
+            is_continuation = any(stripped.startswith(kw) for kw in ['else', 'catch', 'finally'])
+            if not is_continuation:
+                return i - 1
+            # Si c'est une continuation, on continue la boucle pour trouver la fin de ce nouveau bloc
+            base_indent = current_indent
+            
+        i += 1
+    return len(lines) - 1
+
+def _find_brace_or_stmt_end(lines: list, start_idx: int) -> int:
+    """Trouve la fin d'un bloc délimité par des accolades {} ou d'une instruction simple."""
+    depth = 0
+    found_open = False
+    
+    for i in range(start_idx, len(lines)):
+        line = lines[i]
+        # On compte les accolades en ignorant celles qui sont dans des chaînes (approximatif)
+        for char in line:
+            if char == '{':
+                depth += 1
+                found_open = True
+            elif char == '}':
+                depth -= 1
+                
+        if found_open and depth == 0:
+            return i
+            
+    # Si pas d'accolade trouvée, on considère que c'est une instruction simple sur une ligne
+    # ou on prend jusqu'à la prochaine déclaration majeure
+    return start_idx
+
+
+
+
+
+
+
+def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
+    """Parseur Python optimisé : Décorateurs groupés, if/else fusionnés, indentation préservée, SANS boucle infinie."""
+    lines = code.splitlines(keepends=True)
+    blocks = []
+    i = 0
+    
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped:
+            i += 1
+            continue
+            
+        current_indent = _get_indent(line)
+        
+        # Détection des structures
         is_class = re.match(r'^class\s+(\w+)', stripped)
         is_func = re.match(r'^(async\s+)?def\s+(\w+)', stripped)
         is_import = re.match(r'^(import|from)\s+', stripped)
         is_main = re.match(r'^if\s+__name__\s*==\s*[\'"]__main__[\'"]\s*:', stripped)
+        is_if = re.match(r'^if\s+', stripped)
+        is_try = re.match(r'^try\s*:', stripped)
         is_docstring = stripped.startswith('"""') or stripped.startswith("'''")
-
-        if is_class:
-            class_name = is_class.group(1)
-            end_idx = find_block_end(i, current_indent)
-            raw_code = "".join(lines[i:end_idx + 1])
+        is_decorator = stripped.startswith('@')
+        
+        # CORRECTION CRITIQUE : On ignore les décorateurs ici pour qu'ils soient capturés 
+        # par le bloc is_func/is_class qui suit, évitant ainsi la boucle infinie.
+        if is_decorator:
+            i += 1
+            continue
             
-            # Analyse interne de la classe : Regrouper attributs et isoler méthodes
-            children = []
-            attr_lines = []
-            attr_start = -1
+        if is_class or is_func:
+            # 1. Capturer les décorateurs associés
+            start_idx = _get_decorator_start(lines, i)
+            # 2. L'indentation de référence est celle de la fonction/classe
+            base_indent = current_indent
+            # 3. Trouver la fin en partant de la ligne de la fonction (i), pas du décorateur
+            end_idx = _find_function_end(lines, i, base_indent)
             
-            j = i + 1
-            while j <= end_idx:
-                inner_line = lines[j]
-                inner_stripped = inner_line.strip()
-                inner_indent = get_indent(inner_line)
-                
-                if not inner_stripped:
-                    if attr_start != -1: attr_lines.append(inner_line)
-                    j += 1
-                    continue
-                
-                inner_is_func = re.match(r'^(async\s+)?def\s+(\w+)', inner_stripped)
-                
-                # Si c'est une méthode (indentation classe + 4 espaces standard)
-                if inner_is_func and inner_indent > current_indent:
-                    # Sauvegarder les attributs accumulés avant cette méthode
-                    if attr_lines:
-                        children.append({
-                            "type": "class_attributes",
-                            "name": "Attributs de classe",
-                            "code": "".join(attr_lines),
-                            "start": attr_start,
-                            "end": j - 1,
-                            "children": []
-                        })
-                        attr_lines = []
-                        attr_start = -1
-                    
-                    # Ajouter la méthode comme un bloc unique (pas de récursion interne)
-                    method_name = inner_is_func.group(2)
-                    method_end = find_block_end(j, inner_indent)
-                    children.append({
-                        "type": "function",
-                        "name": method_name,
-                        "code": "".join(lines[j:method_end + 1]),
-                        "start": j,
-                        "end": method_end,
-                        "children": [] # Récursion limitée ici
-                    })
-                    j = method_end + 1
-                    continue
-                
-                # C'est un attribut ou du code de niveau classe
-                if attr_start == -1:
-                    attr_start = j
-                attr_lines.append(inner_line)
-                j += 1
+            raw_code = "".join(lines[start_idx:end_idx + 1])
+            name = is_class.group(1) if is_class else is_func.group(2)
+            btype = "class" if is_class else "function"
             
-            # Ne pas oublier les attributs en fin de classe
-            if attr_lines:
-                children.append({
-                    "type": "class_attributes",
-                    "name": "Attributs de classe",
-                    "code": "".join(attr_lines),
-                    "start": attr_start,
-                    "end": end_idx,
-                    "children": []
-                })
-
             blocks.append({
-                "type": "class",
-                "name": class_name,
+                "type": btype,
+                "name": f"{name} (Indent: {base_indent})",
+                "code": raw_code,
+                "start": start_idx,
+                "end": end_idx,
+                "children": []
+            })
+            i = end_idx + 1
+            continue
+            
+        elif is_if or is_try:
+            # Fusionne if/elif/else ou try/except/finally
+            end_idx = _find_control_flow_end(lines, i, current_indent, allow_continuations=True)
+            raw_code = "".join(lines[i:end_idx + 1])
+            name = "Condition (if/else)" if is_if else "Gestion d'erreur (try/except)"
+            
+            blocks.append({
+                "type": "logic_block",
+                "name": f"{name} (Indent: {current_indent})",
                 "code": raw_code,
                 "start": i,
                 "end": end_idx,
-                "children": children
+                "children": []
             })
             i = end_idx + 1
             continue
-
-        elif is_func:
-            func_name = is_func.group(2)
-            end_idx = find_block_end(i, current_indent)
-            blocks.append({
-                "type": "function",
-                "name": func_name,
-                "code": "".join(lines[i:end_idx + 1]),
-                "start": i,
-                "end": end_idx,
-                "children": [] # Pas de sur-découpage des if/for internes
-            })
-            i = end_idx + 1
-            continue
-
+            
         elif is_import:
-            end_idx = find_block_end(i, current_indent)
+            end_idx = _find_control_flow_end(lines, i, current_indent, allow_continuations=False)
             blocks.append({
                 "type": "import",
                 "name": "Imports",
@@ -615,29 +666,13 @@ def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
             })
             i = end_idx + 1
             continue
-
-        elif is_main:
-            end_idx = find_block_end(i, current_indent)
-            blocks.append({
-                "type": "logic_block",
-                "name": "Bloc d'exécution (__main__)",
-                "code": "".join(lines[i:end_idx + 1]),
-                "start": i,
-                "end": end_idx,
-                "children": []
-            })
-            i = end_idx + 1
-            continue
-
+            
         elif stripped.startswith('#') or is_docstring:
-            # Regrouper les commentaires/docstrings consécutifs
             end_idx = i
             for k in range(i + 1, len(lines)):
                 k_stripped = lines[k].strip()
-                if k_stripped.startswith('#') or k_stripped.startswith('"""') or k_stripped.startswith("'''"):
+                if k_stripped.startswith('#') or k_stripped.startswith('"""') or k_stripped.startswith("'''") or not k_stripped:
                     end_idx = k
-                elif not k_stripped:
-                    end_idx = k # Inclure les lignes vides au sein des blocs de commentaires
                 else:
                     break
             blocks.append({
@@ -650,13 +685,13 @@ def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
             })
             i = end_idx + 1
             continue
-
+            
         else:
-            # Fallback pour tout autre code racine (variables globales, etc.)
-            end_idx = find_block_end(i, current_indent)
+            # Fallback pour tout autre code racine
+            end_idx = _find_control_flow_end(lines, i, current_indent, allow_continuations=False)
             blocks.append({
                 "type": "other",
-                "name": "Bloc de code",
+                "name": f"Bloc de code (Indent: {current_indent})",
                 "code": "".join(lines[i:end_idx + 1]),
                 "start": i,
                 "end": end_idx,
@@ -664,10 +699,19 @@ def _parse_python_blocks(code: str, file_path: str) -> list[dict]:
             })
             i = end_idx + 1
             continue
-
+            
     return blocks
-    
-    
+
+
+
+
+
+
+
+
+
+
+
 def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
     """
     Parseur de templates HTML/Jinja avec découpage hiérarchique profond.
@@ -749,25 +793,37 @@ def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
                 j += 1
                 continue
                 
-            # A. Détection des Conditions Jinja {% if ... %} ou {% for ... %}
-            if re.match(r"\{%-?\s*(if|for|with)\s+", stripped, re.IGNORECASE):
+            # Dans la fonction _recursive_parse de _parse_template_blocks, remplacez la section "A. Détection des Conditions Jinja" par :
+
+            # A. Détection des Conditions Jinja {% if ... %}, {% elif ... %}, {% else %} ou {% for ... %}
+            if re.match(r"\{%-?\s*(if|elif|else|for|with)\s+", stripped, re.IGNORECASE):
                 start_block = j
                 depth_logic = 1
                 end_block = j
                 k = j + 1
                 while k < len(content_lines):
                     next_line = content_lines[k].strip()
-                    if re.match(r"\{%-?\s*(if|for|with)\s+", next_line, re.IGNORECASE): depth_logic += 1
-                    if re.match(r"\{%-?\s*end(if|for|with)\b", next_line, re.IGNORECASE): depth_logic -= 1
+                    # On incrémente seulement sur de NOUVEAUX blocs if/for/with imbriqués
+                    if re.match(r"\{%-?\s*(if|for|with)\s+", next_line, re.IGNORECASE): 
+                        depth_logic += 1
+                    # On décrémente uniquement sur les fermetures
+                    if re.match(r"\{%-?\s*end(if|for|with)\b", next_line, re.IGNORECASE): 
+                        depth_logic -= 1
+                        
                     if depth_logic <= 0:
                         end_block = k
                         break
                     k += 1
-                
+                    
                 raw_code = "".join(content_lines[start_block:end_block+1])
-                name_match = re.search(r"(if|for|with)\s+(.+?)\s*%\}", stripped, re.IGNORECASE)
-                block_name = f"Logic: {name_match.group(2).strip()[:30]}" if name_match else "Logic Block"
                 
+                # Extraction propre du nom pour l'affichage
+                name_match = re.search(r"(if|elif|else|for|with)\s+(.+?)\s*%\}", stripped, re.IGNORECASE)
+                if name_match:
+                    block_name = f"Logic: {name_match.group(1).upper()} ({name_match.group(2).strip()[:30]})"
+                else:
+                    block_name = "Logic Block (if/else/for)"
+                    
                 inner_lines = content_lines[start_block+1 : end_block]
                 children = _recursive_parse(inner_lines, start_offset + start_block + 1, depth + 1)
                 
@@ -782,7 +838,6 @@ def _parse_template_blocks(code: str, file_path: str) -> list[dict]:
                 })
                 j = end_block + 1
                 continue
-
             # B. Détection des Balises HTML Structurantes
             open_match = re.match(r"<([a-zA-Z0-9]+)(\s[^>]*)?>", stripped)
             if open_match:
@@ -1029,42 +1084,65 @@ def _parse_css_blocks(code: str, file_path: str) -> list[dict]:
 
 
 def _parse_js_blocks(code: str, file_path: str) -> list[dict]:
-    """Parseur JS optimisé : Limitation de la récursion, regroupement par fonctions/classes."""
+    """Parseur JS optimisé : Chaînes if/else fusionnées, indentation préservée."""
     lines = code.splitlines(keepends=True)
     blocks = []
     i = 0
-
-    def find_brace_end(start_idx: int) -> int:
-        depth = 0
-        for k in range(start_idx, len(lines)):
-            depth += lines[k].count('{') - lines[k].count('}')
-            if depth == 0:
-                return k
-        return len(lines) - 1
-
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
         if not stripped:
             i += 1
             continue
-
+        
         is_class = re.match(r'^(export\s+)?class\s+(\w+)', stripped)
+        # Regex plus robuste pour les fonctions et variables
         is_func = re.match(r'^(export\s+)?(async\s+)?function\s+(\w+)|^(export\s+)?(const|let|var)\s+(\w+)\s*=\s*(async\s+)?(?:function|\([^)]*\)\s*=>)', stripped)
+        is_if = re.match(r'^(if|else\s+if|else|try|catch|finally)\b', stripped, re.IGNORECASE)
         is_import = re.match(r'^import\s+', stripped)
         is_export = re.match(r'^export\s+(?!default\s+(class|function))', stripped)
 
-        if is_class or is_func or is_import or is_export:
+        if is_if:
+            end_idx = _find_if_else_chain_end(lines, i)
+            blocks.append({
+                "type": "logic_block",
+                "name": "Condition / Flux de contrôle",
+                "code": "".join(lines[i:end_idx + 1]),
+                "start": i,
+                "end": end_idx,
+                "children": []
+            })
+            i = end_idx + 1
+            continue
+            
+        elif is_class or is_func or is_import or is_export:
             brace_idx = -1
             for k in range(i, min(i + 5, len(lines))):
                 if '{' in lines[k]:
                     brace_idx = k
                     break
+            
+            name = "Anonymous"
+            btype = "other"
+            
+            if is_class:
+                name = is_class.group(2)
+                btype = "class"
+            elif is_func:
+                # Extraction sécurisée du nom
+                if is_func.group(3): name = is_func.group(3) # function name()
+                elif is_func.group(5): name = is_func.group(5) # const name = ...
+                elif is_func.group(7): name = "Anonymous"
+                btype = "function"
+            elif is_import:
+                name = "Imports"
+                btype = "import"
+            elif is_export:
+                name = "Export"
+                btype = "other"
 
             if brace_idx != -1:
-                end_idx = find_brace_end(brace_idx)
-                name = is_class.group(2) if is_class else (is_func.group(3) or is_func.group(5) or is_func.group(7) or "Anonymous")
-                btype = "class" if is_class else "function"
+                end_idx = _find_brace_or_stmt_end(lines, brace_idx)
             else:
                 end_idx = i
                 while end_idx + 1 < len(lines) and not lines[end_idx + 1].strip().startswith(('import', 'export', 'class', 'function', 'const', 'let', 'var', '//', '/*')):
@@ -1072,8 +1150,6 @@ def _parse_js_blocks(code: str, file_path: str) -> list[dict]:
                         end_idx += 1
                     else:
                         break
-                name = "Statement"
-                btype = "other"
 
             blocks.append({
                 "type": btype,
@@ -1081,18 +1157,16 @@ def _parse_js_blocks(code: str, file_path: str) -> list[dict]:
                 "code": "".join(lines[i:end_idx + 1]),
                 "start": i,
                 "end": end_idx,
-                "children": [] # Pas de récursion interne pour éviter le sur-découpage
+                "children": []
             })
             i = end_idx + 1
         else:
-            # Regrouper le reste du code en blocs logiques
             end_idx = i
             while end_idx + 1 < len(lines):
                 next_stripped = lines[end_idx + 1].strip()
-                if next_stripped and re.match(r'^(class|function|const|let|var|import|export)\s+', next_stripped):
+                if next_stripped and re.match(r'^(class|function|const|let|var|import|export|if|else|try|catch)\s+', next_stripped, re.IGNORECASE):
                     break
                 end_idx += 1
-
             blocks.append({
                 "type": "other",
                 "name": "Bloc de code",
@@ -1102,52 +1176,74 @@ def _parse_js_blocks(code: str, file_path: str) -> list[dict]:
                 "children": []
             })
             i = end_idx + 1
+    return blocks    
 
-    return blocks
 
 def _parse_c_blocks(code: str, file_path: str) -> list[dict]:
-    """Parseur C/C++ optimisé : Même logique que JS, adaptée aux types C."""
+    """Parseur C/C++ optimisé : Chaînes if/else fusionnées, indentation préservée."""
     lines = code.splitlines(keepends=True)
     blocks = []
     i = 0
-
-    def find_brace_end(start_idx: int) -> int:
-        depth = 0
-        for k in range(start_idx, len(lines)):
-            depth += lines[k].count('{') - lines[k].count('}')
-            if depth == 0:
-                return k
-        return len(lines) - 1
-
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
         if not stripped:
             i += 1
             continue
-
+        
         is_class_struct = re.match(r'^(class|struct|enum|namespace)\s+(\w+)', stripped)
         is_func = re.match(r'^(void|int|char|float|double|bool|auto|unsigned|signed|long|short|size_t|struct|enum|class)\s+\w+\s*\(', stripped)
+        is_if = re.match(r'^(if|else\s+if|else|try|catch|finally)\b', stripped, re.IGNORECASE)
         is_include = re.match(r'^#\s*include', stripped)
         is_define = re.match(r'^#\s*define', stripped)
 
-        if is_class_struct or is_func or is_include or is_define:
+        if is_if:
+            end_idx = _find_if_else_chain_end(lines, i)
+            blocks.append({
+                "type": "logic_block",
+                "name": "Condition / Flux de contrôle",
+                "code": "".join(lines[i:end_idx + 1]),
+                "start": i,
+                "end": end_idx,
+                "children": []
+            })
+            i = end_idx + 1
+            continue
+            
+        elif is_class_struct or is_func or is_include or is_define:
             brace_idx = -1
             for k in range(i, min(i + 5, len(lines))):
                 if '{' in lines[k]:
                     brace_idx = k
                     break
+            
+            name = "Unknown"
+            btype = "other"
+
+            if is_class_struct:
+                name = is_class_struct.group(2)
+                btype = "class"
+            elif is_func:
+                # Extraction sécurisée du nom de fonction C
+                match_name = re.search(r'\w+\s*\(', stripped)
+                if match_name:
+                    name = match_name.group(0).replace('(', '').strip()
+                else:
+                    name = "Function"
+                btype = "function"
+            elif is_include:
+                name = "Include"
+                btype = "import"
+            elif is_define:
+                name = "Define"
+                btype = "other"
 
             if brace_idx != -1:
-                end_idx = find_brace_end(brace_idx)
-                name = is_class_struct.group(2) if is_class_struct else re.search(r'\w+\s*\(', stripped).group(0).replace('(', '').strip()
-                btype = "class" if is_class_struct else "function"
+                end_idx = _find_brace_or_stmt_end(lines, brace_idx)
             else:
                 end_idx = i
-                while end_idx + 1 < len(lines) and not lines[end_idx + 1].strip().startswith(('class', 'struct', 'enum', 'namespace', 'void', 'int', 'char', 'float', 'double', 'bool', 'auto', '#')):
+                while end_idx + 1 < len(lines) and not lines[end_idx + 1].strip().startswith(('class', 'struct', 'enum', 'namespace', 'void', 'int', 'char', 'float', 'double', 'bool', 'auto', '#', 'if', 'else')):
                     end_idx += 1
-                name = "Directive / Déclaration"
-                btype = "other"
 
             blocks.append({
                 "type": btype,
@@ -1155,17 +1251,16 @@ def _parse_c_blocks(code: str, file_path: str) -> list[dict]:
                 "code": "".join(lines[i:end_idx + 1]),
                 "start": i,
                 "end": end_idx,
-                "children": [] # Récursion limitée
+                "children": []
             })
             i = end_idx + 1
         else:
             end_idx = i
             while end_idx + 1 < len(lines):
                 next_stripped = lines[end_idx + 1].strip()
-                if next_stripped and re.match(r'^(class|struct|enum|namespace|void|int|char|float|double|bool|auto|unsigned|signed|long|short|size_t|#)\s*', next_stripped):
+                if next_stripped and re.match(r'^(class|struct|enum|namespace|void|int|char|float|double|bool|auto|unsigned|signed|long|short|size_t|#|if|else)\s*', next_stripped, re.IGNORECASE):
                     break
                 end_idx += 1
-
             blocks.append({
                 "type": "other",
                 "name": "Bloc de code",
@@ -1175,8 +1270,8 @@ def _parse_c_blocks(code: str, file_path: str) -> list[dict]:
                 "children": []
             })
             i = end_idx + 1
-
-    return blocks    
+    return blocks
+    
 def parse_blocks(code: str, file_path: str = "") -> list[dict]:
     ext = Path(file_path).suffix.lower()
     if ext in ('.html', '.jinja', '.jinja2', '.htm'): return _parse_template_blocks(code, file_path)
@@ -7902,145 +7997,6 @@ class BlockEditorView(Gtk.Box):
             if block.get("children"):
                 self._render_blocks_recursive(block["children"], container, level + 1, parent_prefix=block["hierarchical_id"])
 
-    def _render_blocks_recursive(self, blocks, container, level=0, parent_prefix=""):
-        """Rend les blocs et leurs enfants de manière récursive avec indentation et numérotation."""
-        for index, block in enumerate(blocks):
-            # Calcul de l'ID hiérarchique (ex: 1.2.1)
-            current_index = index + 1
-            if parent_prefix:
-                block["hierarchical_id"] = f"{parent_prefix}.{current_index}"
-            else:
-                block["hierarchical_id"] = str(current_index)
-            
-            # Le nom interne reste utile pour la logique, mais l'affichage utilise hierarchical_id
-            # On garde block["name"] tel quel pour la compatibilité interne si besoin, 
-            # mais l'UI utilisera hierarchical_id via la Modif 1.
-            card = BlockCard(
-                block, 
-                self._on_block_save, 
-                self._on_block_delete, 
-                self._on_block_copy, 
-                self.file_ext, 
-                ai_engine=self.ai_engine, 
-                parent_window=self
-            )
-            
-            # Indentation visuelle pour les enfants
-            if level > 0:
-                card.set_margin_start(level * 20)
-                card.add_css_class("child-block") 
-            
-            container.append(card)
-            self._cards.append(card) 
-            
-            # Si le bloc a des enfants, on les rend récursivement en passant le préfixe actuel
-            if block.get("children"):
-                self._render_blocks_recursive(block["children"], container, level + 1, parent_prefix=block["hierarchical_id"])
-
-    def _render_blocks_recursive(self, blocks, container, level=0, parent_prefix=""):
-        """Rend les blocs et leurs enfants de manière récursive avec indentation et numérotation."""
-        for index, block in enumerate(blocks):
-            # Calcul de l'ID hiérarchique (ex: 1.2.1)
-            current_index = index + 1
-            if parent_prefix:
-                block["hierarchical_id"] = f"{parent_prefix}.{current_index}"
-            else:
-                block["hierarchical_id"] = str(current_index)
-            
-            # Le nom interne reste utile pour la logique, mais l'affichage utilise hierarchical_id
-            # On garde block["name"] tel quel pour la compatibilité interne si besoin, 
-            # mais l'UI utilisera hierarchical_id via la Modif 1.
-            card = BlockCard(
-                block, 
-                self._on_block_save, 
-                self._on_block_delete, 
-                self._on_block_copy, 
-                self.file_ext, 
-                ai_engine=self.ai_engine, 
-                parent_window=self
-            )
-            
-            # Indentation visuelle pour les enfants
-            if level > 0:
-                card.set_margin_start(level * 20)
-                card.add_css_class("child-block") 
-            
-            container.append(card)
-            self._cards.append(card) 
-            
-            # Si le bloc a des enfants, on les rend récursivement en passant le préfixe actuel
-            if block.get("children"):
-                self._render_blocks_recursive(block["children"], container, level + 1, parent_prefix=block["hierarchical_id"])
-
-    def _render_blocks_recursive(self, blocks, container, level=0, parent_prefix=""):
-        """Rend les blocs et leurs enfants de manière récursive avec indentation et numérotation."""
-        for index, block in enumerate(blocks):
-            # Calcul de l'ID hiérarchique (ex: 1.2.1)
-            current_index = index + 1
-            if parent_prefix:
-                block["hierarchical_id"] = f"{parent_prefix}.{current_index}"
-            else:
-                block["hierarchical_id"] = str(current_index)
-            
-            # Le nom interne reste utile pour la logique, mais l'affichage utilise hierarchical_id
-            # On garde block["name"] tel quel pour la compatibilité interne si besoin, 
-            # mais l'UI utilisera hierarchical_id via la Modif 1.
-            card = BlockCard(
-                block, 
-                self._on_block_save, 
-                self._on_block_delete, 
-                self._on_block_copy, 
-                self.file_ext, 
-                ai_engine=self.ai_engine, 
-                parent_window=self
-            )
-            
-            # Indentation visuelle pour les enfants
-            if level > 0:
-                card.set_margin_start(level * 20)
-                card.add_css_class("child-block") 
-            
-            container.append(card)
-            self._cards.append(card) 
-            
-            # Si le bloc a des enfants, on les rend récursivement en passant le préfixe actuel
-            if block.get("children"):
-                self._render_blocks_recursive(block["children"], container, level + 1, parent_prefix=block["hierarchical_id"])
-
-    def _render_blocks_recursive(self, blocks, container, level=0, parent_prefix=""):
-        """Rend les blocs et leurs enfants de manière récursive avec indentation et numérotation."""
-        for index, block in enumerate(blocks):
-            # Calcul de l'ID hiérarchique (ex: 1.2.1)
-            current_index = index + 1
-            if parent_prefix:
-                block["hierarchical_id"] = f"{parent_prefix}.{current_index}"
-            else:
-                block["hierarchical_id"] = str(current_index)
-            
-            # Le nom interne reste utile pour la logique, mais l'affichage utilise hierarchical_id
-            # On garde block["name"] tel quel pour la compatibilité interne si besoin, 
-            # mais l'UI utilisera hierarchical_id via la Modif 1.
-            card = BlockCard(
-                block, 
-                self._on_block_save, 
-                self._on_block_delete, 
-                self._on_block_copy, 
-                self.file_ext, 
-                ai_engine=self.ai_engine, 
-                parent_window=self
-            )
-            
-            # Indentation visuelle pour les enfants
-            if level > 0:
-                card.set_margin_start(level * 20)
-                card.add_css_class("child-block") 
-            
-            container.append(card)
-            self._cards.append(card) 
-            
-            # Si le bloc a des enfants, on les rend récursivement en passant le préfixe actuel
-            if block.get("children"):
-                self._render_blocks_recursive(block["children"], container, level + 1, parent_prefix=block["hierarchical_id"])
 
     def _render_blocks(self):
         while child := self.blocks_box.get_first_child(): 
