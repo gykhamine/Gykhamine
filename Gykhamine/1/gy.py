@@ -33,8 +33,8 @@ def global_log(message: str):
     for cb in _global_log_callbacks:
         try:
             cb(message)
-        except:
-            pass
+        except Exception as e:
+            global_log(f"⚠️ Erreur dans global_log: {type(e).__name__} - {e}")
 
 
 
@@ -153,8 +153,8 @@ def auto_mount_gy():
         if result.returncode == 0:
             is_mounted = True
             print(f"✅ Partition GY déjà montée sur {GY_MOUNT_POINT}")
-    except Exception:
-        pass
+    except Exception as e:
+        global_log(f"⚠️ Erreur dans auto_mount_gy: {type(e).__name__} - {e}")
 
     if not is_mounted:
         print(f"📂 Tentative de montage de {GY_DEVICE} sur {GY_MOUNT_POINT}...")
@@ -177,21 +177,21 @@ def auto_mount_gy():
 if not auto_mount_gy():
     print("⚠️ Le montage automatique a échoué. L'application va continuer mais certains chemins GY peuvent être inaccessibles.")
     
-# 2. Définition des valeurs par défaut uniquement
+# 2. Définition des valeurs par défaut uniquement (Lecture dynamique depuis .env)
 BASE_PATH = "/run/media/gykhamine/GY/GS-CODE/"
 
 DEFAULT_CONFIG = {
     # LLaMA Server
     "llama_server_path": os.path.join(BASE_PATH, "gysingner/llama-server"),
     "llama_model_path": os.path.join(BASE_PATH, "gysingner/models/gysingner.gguf"),
-    "llama_host": "127.0.0.1",
-    "llama_port": 8080,
+    "llama_host": get_env_value("LLAMA_HOST", ""), 
+    "llama_port": get_env_value("LLAMA_PORT", ""), 
     
     # Gunicorn
-    "gunicorn_bind": "0.0.0.0:8000",
-    "gunicorn_ssl_enabled": False,
-    "gunicorn_ssl_cert_path": os.path.join(BASE_PATH, "ssl/cert.pem"),
-    "gunicorn_ssl_key_path": os.path.join(BASE_PATH, "ssl/key.pem"),
+    "gunicorn_bind": get_env_value("GUNICORN_BIND", ""),
+    "gunicorn_ssl_enabled": False, # Gardé en dur car c'est un booléen simple
+    "gunicorn_ssl_cert_path": get_env_value("GUNICORN_SSL_CERT", ""),
+    "gunicorn_ssl_key_path": get_env_value("GUNICORN_SSL_KEY", ""),
     
     # Projets
     "last_project": "",
@@ -203,25 +203,25 @@ DEFAULT_CONFIG = {
     
     # Ports
     "auto_find_free_port": True,
-    "default_port_range_start": 8000,
-    "default_port_range_end": 8010,
+    "default_port_range_start": get_env_value("PORT_RANGE_START", ""),
+    "default_port_range_end": get_env_value("PORT_RANGE_END", ""),
     
     # Logs et Base de données
     "log_file_path": os.path.join(BASE_PATH, "logs/studio.log"),
     "db_path": os.path.join(BASE_PATH, "db/gykhamine_studio.db"),
     
-    # PostgreSQL
-    "pg_device": get_env_value("PG_PARTITION_UUID"),
+    # PostgreSQL (TOUT via .env - Pas de valeur par défaut sensible)
+    "pg_device": get_env_value("PG_PARTITION_UUID", ""), 
     "pg_mount_point": "/var/lib/pgsql/data",
-    "pg_db_name": "ma_base",
-    "pg_db_user": "mon_user",
-    "pg_db_password": "mot_de_passe",
-    "pg_bind_ip": "127.0.0.1",
+    "pg_db_name": get_env_value("PG_DB_NAME", ""),
+    "pg_db_user": get_env_value("PG_DB_USER", ""),
+    "pg_db_password": get_env_value("PG_DB_PASSWORD", ""), 
+    "pg_bind_ip": get_env_value("PG_BIND_IP", ""),
     
     # Redis
     "redis_mode": "local",
-    "redis_ip": "127.0.0.1",
-    "redis_port": 6379,
+    "redis_ip": get_env_value("REDIS_IP", ""),
+    "redis_port": get_env_value("REDIS_PORT", ""),
     "redis_data_dir": os.path.join(BASE_PATH, "data_redis/"),
     "redis_use_persistence": True,
     "redis_env_path": os.path.join(BASE_PATH, "Gykhamine/gy/.env"),
@@ -230,19 +230,19 @@ DEFAULT_CONFIG = {
     # NFS
     "nfs_server_mode": "local",
     "nfs_export_dir": os.path.join(BASE_PATH, "gy/media"),
-    "nfs_lan_network": "192.168.1.0/24",
-    "nfs_client_server_ip": "192.168.1.10",
+    "nfs_lan_network": get_env_value("NFS_LAN_NETWORK", ""),
+    "nfs_client_server_ip": get_env_value("NFS_CLIENT_SERVER_IP", ""),
     "nfs_client_export_dir": "/srv/nfs",
     "nfs_client_mount_point": os.path.expanduser("~/nfs_mount"),
     
     # Nginx
     "nginx_conf_path": "/etc/nginx/nginx.conf",
     "nginx_mode": "reverse_proxy",
-    "nginx_server_name": "localhost",
-    "nginx_listen_port": "443",
+    "nginx_server_name": get_env_value("NGINX_SERVER_NAME", ""),
+    "nginx_listen_port": get_env_value("NGINX_LISTEN_PORT", ""),
     "nginx_upstream_name": "gunicorn",
-    "nginx_upstream_servers": "127.0.0.1:8000, 127.0.0.1:8001, 127.0.0.1:8002",
-    "nginx_proxy_pass": "http://gunicorn",
+    "nginx_upstream_servers": get_env_value("NGINX_UPSTREAM_SERVERS", ""),
+    "nginx_proxy_pass": get_env_value("NGINX_PROXY_PASS", ""),
     "nginx_force_https": True,
     "nginx_ssl_cert": "/etc/pki/nginx/server.crt",
     "nginx_ssl_key": "/etc/pki/nginx/private/server.key",
@@ -259,18 +259,17 @@ DEFAULT_CONFIG = {
     
     # SSH
     "ssh_server_mode": "local",
-    "ssh_server_port": 22,
-    "ssh_client_host": "192.168.1.10",
-    "ssh_client_port": 22,
-    "ssh_client_user": "root",
+    "ssh_server_port": get_env_value("SSH_SERVER_PORT", ""),
+    "ssh_client_host": get_env_value("SSH_CLIENT_HOST", ""),
+    "ssh_client_port": get_env_value("SSH_CLIENT_PORT", ""),
+    "ssh_client_user": get_env_value("SSH_CLIENT_USER", ""),
     "ssh_client_key": os.path.join(BASE_PATH, ".ssh/id_rsa"),
     "ssh_client_auth_mode": "key",
     
     # Virtual Environment
     "venv_name": "venv",
     "venv_path": "",
-}
-# ═══════════════════════════════════════════════════════════════════════
+}# ═══════════════════════════════════════════════════════════════════════
 #  SQLITE ENGINE — CONFIG + SMART MEMORY + LOGS
 # ═══════════════════════════════════════════════════════════════════════
 def _get_db_path(cfg_override: str = None) -> Path:
@@ -333,8 +332,8 @@ def load_config() -> dict:
         for key, val in rows:
             try: cfg[key] = json.loads(val)
             except Exception: cfg[key] = val
-    except Exception:
-        global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
+    except Exception as e:
+        global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
     return cfg
 
 def save_config(cfg: dict):
@@ -405,8 +404,8 @@ def get_cached_command(intent: str) -> dict:
         row = con.execute("SELECT command, is_process FROM ai_cmd_cache WHERE intent_hash = ?", (_get_intent_hash(intent),)).fetchone()
         con.close()
         if row: return {"command": row[0], "is_process": bool(row[1])}
-    except Exception:
-        global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
+    except Exception as e:
+        global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
     return None
 
 def save_command_to_cache(intent: str, command: str, is_process: bool = False):
@@ -428,8 +427,8 @@ def get_cached_block(intent: str) -> dict:
         row = con.execute("SELECT content, block_type FROM ai_block_cache WHERE intent_hash = ?", (_get_intent_hash(intent),)).fetchone()
         con.close()
         if row: return {"content": row[0], "block_type": row[1]}
-    except Exception:
-        global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
+    except Exception as e:
+        global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
     return None
 
 def save_block_to_cache(intent: str, content: str, block_type: str = 'code'):
@@ -451,8 +450,8 @@ def get_cached_process(intent: str) -> dict:
         row = con.execute("SELECT json_content, role_type FROM ai_process_cache WHERE intent_hash = ?", (_get_intent_hash(intent),)).fetchone()
         con.close()
         if row: return {"json_content": row[0], "role_type": row[1]}
-    except Exception:
-        global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
+    except Exception as e:
+        global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
     return None
 
 def save_process_to_cache(intent: str, json_content: str, role_type: str = 'general'):
@@ -482,8 +481,8 @@ def kill_process_on_port(port: int) -> bool:
         if result.stdout.strip():
             for pid in result.stdout.strip().split('\n'): subprocess.run(f"kill -9 {pid}", shell=True)
             return True
-    except Exception:
-        global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
+    except Exception as e:
+        global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
     return False
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1340,19 +1339,18 @@ class NativeTtyTerminal(Gtk.Window):
         cols = max(w // 9, 80)
         rows = max(h // 18, 24)
         try: fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-        except:
-            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
-
+        except Exception as e:
+            global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
     def _close_terminal(self, *args):
         self.is_running = False
         if self.pid:
             try: os.kill(self.pid, 9); os.waitpid(self.pid, 0)
-            except:
-                global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
+            except Exception as e:
+                global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
         if self.master_fd:
             try: os.close(self.master_fd)
-            except:
-                global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
+            except Exception as e:
+                global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
         self.destroy()
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1373,9 +1371,8 @@ class FileWatcher(threading.Thread):
             for p in self.root_path.rglob('*'):
                 if p.is_file():
                     try: self.snapshot[str(p)] = p.stat().st_mtime
-                    except:
-                        global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
-
+                    except Exception as e:
+                        global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
     def run(self):
         while self.running:
             time.sleep(1.5)
@@ -1388,8 +1385,8 @@ class FileWatcher(threading.Thread):
                         mtime = p.stat().st_mtime
                         current_files[str(p)] = mtime
                         if str(p) not in self.snapshot or self.snapshot[str(p)] != mtime: changed = True
-                    except:
-                        global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
+                    except Exception as e:
+                        global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
             if set(current_files.keys()) != set(self.snapshot.keys()): changed = True
             if changed:
                 self.snapshot = current_files
@@ -1800,9 +1797,8 @@ class LlamaSetupDialog(Gtk.Dialog):
         try:
             file = dialog.open_finish(result)
             if file: entry.set_text(file.get_path())
-        except:
-            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
-
+        except Exception as e:
+            global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
     def _on_start(self, *_):
         bin_path = self.entry_bin.get_text().strip()
         model_path = self.entry_model.get_text().strip()
@@ -2166,9 +2162,8 @@ class GitManagerDialog(Gtk.Dialog):
         try:
             folder = dialog.select_folder_finish(result)
             if folder: self.entry_path.set_text(folder.get_path())
-        except:
-            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
-
+        except Exception as e:
+            global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
     def _log(self, text):
         buf = self.txt_log.get_buffer()
         buf.insert(buf.get_end_iter(), f"$ {text}\n")
@@ -2934,8 +2929,8 @@ class FilePanel(Gtk.Box):
             else:
                 # Fallback vers un toast si le terminal n'est pas accessible
                 self._show_toast(msg)
-        except Exception:
-            pass
+        except Exception as e:
+            global_log(f"⚠️ Erreur dans _log_message: {type(e).__name__} - {e}")
 
     def start_watcher(self, root_path):
         if self.watcher: 
@@ -4214,8 +4209,8 @@ class ControlPanel(Gtk.Box):
             res = cur.fetchone()
             con.close()
             if res: return bool(res[0])
-        except:
-            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
+        except Exception as e:
+            global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
         try:
             return subprocess.run(["systemctl", "is-enabled", service_name], capture_output=True).returncode == 0
         except: return False
@@ -4517,8 +4512,8 @@ class ControlPanel(Gtk.Box):
             else:
                 self.lbl_dnsmasq_status.set_text("Statut Service: 🔴 Inactif")
                 self.lbl_dnsmasq_status.add_css_class("dim-label")
-        except Exception:
-            pass
+        except Exception as e:
+            global_log(f"⚠️ Erreur dans _check_dnsmasq_status: {type(e).__name__} - {e}")
 
     def _save_dnsmasq_from_form(self, *_):
         """Génère le fichier de configuration Dnsmasq à partir des champs du formulaire"""
@@ -4611,8 +4606,8 @@ systemctl restart NetworkManager
             else:
                 self.lbl_dnsmasq_status.set_text("Statut: 🔴 Inactif")
                 self.lbl_dnsmasq_status.add_css_class("dim-label")
-        except:
-            pass
+        except Exception as e:
+            global_log(f"⚠️ Erreur dans _check_dnsmasq_status: {type(e).__name__} - {e}")
 
     def _save_dnsmasq_from_form(self, *_):
         """Génère le fichier /etc/dnsmasq.d/local.conf depuis le formulaire"""
@@ -4755,8 +4750,8 @@ chmod 700 /run/tor
                 self.lbl_tor_status.set_text("Status: 🟢 Actif"); self.lbl_tor_status.remove_css_class("dim-label")
             else:
                 self.lbl_tor_status.set_text("Status: 🔴 Inactif"); self.lbl_tor_status.add_css_class("dim-label")
-        except:
-            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
+        except Exception as e:
+            global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
         return False
 
     def _check_tor_ip(self):
@@ -5101,9 +5096,8 @@ chmod 700 /run/tor
         try:
             folder = dialog.select_folder_finish(result)
             if folder: entry.set_text(folder.get_path())
-        except:
-            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
-
+        except Exception as e:
+            global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
     # ═══════════════════════════════════════════════════════════════════════
     #  NOUVEAU : GÉNÉRATION SSL AUTOMATIQUE
     # ═══════════════════════════════════════════════════════════════════════
@@ -5494,8 +5488,8 @@ chmod 700 /run/tor
                     lines = [l for l in lines if not l.strip().startswith("# --- Gykhamine NFS ---") and not l.strip().startswith(export_dir)]
                     content = "".join(lines)
                     subprocess.run(["sudo", "tee", exports_path], input=content, text=True, check=True)
-                except Exception:
-                    global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
+                except Exception as e:
+                    global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
                 subprocess.run(["sudo", "exportfs", "-ra"], check=True)
                 subprocess.run(["sudo", "systemctl", "stop", "nfs-server.service"], check=True)
                 GLib.idle_add(self._set_dot, "nfs_server", False)
@@ -6202,9 +6196,8 @@ print(json.dumps(result, default=str))
         try:
             folder = dialog.select_folder_finish(result)
             if folder: entry.set_text(str(Path(folder.get_path()) / f"{self.get_project_root().name}.zip"))
-        except Exception:
-            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
-
+        except Exception as e:
+            global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
     def _decompress_archive(self, *_):
         Gtk.FileDialog(title="Select a .zip archive").open(self.get_root(), None, self._on_decompress_selected)
 
@@ -6674,9 +6667,8 @@ class DirectoryPickerRow(Adw.ActionRow):
         try:
             folder = dialog.select_folder_finish(result)
             if folder: self.entry.set_text(str(Path(folder.get_path()) / self.filename))
-        except Exception:
-            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
-
+        except Exception as e:
+            global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
     def get_text(self): return self.entry.get_text()
 
 class SettingsDialog(Adw.PreferencesDialog):
@@ -6775,8 +6767,8 @@ class SettingsDialog(Adw.PreferencesDialog):
         try:
             self.config["default_port_range_start"] = int(self.config.get("default_port_range_start", 8000))
             self.config["default_port_range_end"] = int(self.config.get("default_port_range_end", 8010))
-        except:
-            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
+        except Exception as e:
+            global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
         self.on_save(self.config); self.close()
 
 
@@ -7698,9 +7690,8 @@ class GykhamineStudioApp(Adw.Application):
         try:
             folder = dialog.select_folder_finish(result)
             if folder: self._load_project(Path(folder.get_path()))
-        except:
-            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
-
+        except Exception as e:
+            global_log(f"⚠️ Erreur dans gy.py: {type(e).__name__} - {e}")
     # Dans la classe GykhamineStudioApp, méthode _load_project
     def _load_project(self, path: Path):
         self.project_root = path
