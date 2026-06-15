@@ -6551,9 +6551,18 @@ class BlockEditorView(Gtk.Box):
         self._render_blocks_recursive(self.blocks, self.blocks_box, level=0)
 
     def _on_block_save(self, block, new_code):
-        block["code"] = new_code; self._push_state(); self.toast_cb("✅ Updated")
-        if self.current_file and self._get_config_cb: memory_record(self._get_config_cb(), str(self.current_file.parent), str(self.current_file), block.get("name"), "edit")
-
+        # CORRECTION CRITIQUE : Forcer un saut de ligne à la fin de chaque bloc 
+        # pour éviter que le bloc suivant ne se colle à lui (ex: "return finidef autre()")
+        if not new_code.endswith('\n'):
+            new_code += '\n'
+            
+        block["code"] = new_code
+        self._push_state()
+        self.toast_cb("✅ Updated")
+        
+        if self.current_file and self._get_config_cb:
+            memory_record(self._get_config_cb(), str(self.current_file.parent), str(self.current_file), block.get("name"), "edit")
+            
     def _on_block_delete(self, block):
         self.blocks.remove(block); self._push_state(); self._render_blocks(); self.toast_cb("🗑 Deleted")
 
@@ -6569,30 +6578,41 @@ class BlockEditorView(Gtk.Box):
             if card.expanded: card._toggle_edit()
 
     def _save_file(self, *_):
-        if not self.current_file: 
+        if not self.current_file:
             return self.toast_cb("❌ No file open")
-        
         try:
-            # 1. Créer un fichier de sauvegarde (.bak) contenant l'ancienne structure
+            # 1. Créer un fichier de sauvegarde (.bak)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_path = self.current_file.with_suffix(f".{timestamp}{self.current_file.suffix}.bak")
-            
             if self.current_file.exists():
                 shutil.copy2(self.current_file, backup_path)
             
-            # 2. Écrire la nouvelle structure dans un fichier temporaire (sécurité anti-coupure)
+            # 2. Écrire dans un fichier temporaire
             temp_path = self.current_file.with_suffix(f".{timestamp}.tmp")
-            new_content = "".join(b["code"] for b in self.blocks)
+            
+            # CORRECTION CRITIQUE : S'assurer que chaque bloc se termine par un saut de ligne 
+            # avant de les concaténer, même si un bloc a été corrompu en mémoire.
+            safe_blocks = []
+            for b in self.blocks:
+                code = b["code"]
+                if not code.endswith('\n'):
+                    code += '\n'
+                safe_blocks.append(code)
+                
+            new_content = "".join(safe_blocks)
             temp_path.write_text(new_content, encoding="utf-8")
             
-            # 3. Remplacer irréversiblement le fichier existant par le nouveau fichier
+            # 3. Remplacer le fichier original
             shutil.move(str(temp_path), str(self.current_file))
-            
             self._push_state()
             self.toast_cb(f"💾 Saved: {self.current_file.name} (Backup: {backup_path.name})")
             
-        except Exception as e: 
+        except Exception as e:
             self.toast_cb(f"❌ Error: {e}")
+
+
+
+
     def _run_current_file(self, *_):
         if not self.current_file: return self.toast_cb("❌ No file")
         if self.run_file_cb: self.run_file_cb(self.current_file)
@@ -7689,3 +7709,4 @@ class GykhamineStudioApp(Adw.Application):
 if __name__ == "__main__":
     app = GykhamineStudioApp()
     sys.exit(app.run(sys.argv))
+            
