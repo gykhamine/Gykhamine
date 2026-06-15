@@ -2729,7 +2729,7 @@ class BlockCard(Gtk.Box):
         self.editor_box.set_visible(self.expanded)
 
     def _view_code(self, *_):
-        dialog = Gtk.Dialog(title=f"Editing: {self.block['name']}", transient_for=self.get_root())
+        dialog = Gtk.Dialog(title=f"Édition : {self.block['name']}", transient_for=self.get_root())
         dialog.add_css_class("rounded-dialog")
         dialog.set_default_size(800, 500)
         
@@ -2741,13 +2741,38 @@ class BlockCard(Gtk.Box):
         scroll.set_vexpand(True)
         scroll.set_hexpand(True)
         
-        textview = Gtk.TextView()
+        # --- CORRECTION : Utilisation de GtkSource.View au lieu de Gtk.TextView ---
+        textview = GtkSource.View()
         textview.set_monospace(True)
         textview.set_editable(True)
         textview.set_wrap_mode(Gtk.WrapMode.WORD)
+        textview.set_show_line_numbers(True)
+        textview.set_highlight_current_line(True)
         textview.add_css_class("code-editor")
-        textview.get_buffer().set_text(self.block["code"])
-        apply_syntax_highlighting(textview, self.lang)
+        
+        # 1. Configuration du Buffer et du Langage (identique à l'éditeur inline)
+        buffer = GtkSource.Buffer()
+        lang_mgr = GtkSource.LanguageManager.get_default()
+        lang_map = {
+            'py': 'python', 'js': 'javascript', 'css': 'css',
+            'html': 'html', 'c': 'c', 'cpp': 'cpp', 'sh': 'sh',
+            'jinja': 'html'
+        }
+        lang_id = lang_map.get(self.lang, 'text')
+        language = lang_mgr.get_language(lang_id)
+        if language:
+            buffer.set_language(language)
+            
+        # 2. Application du thème sombre (Adwaita-dark ou fallback)
+        scheme_mgr = GtkSource.StyleSchemeManager.get_default()
+        scheme = scheme_mgr.get_scheme('Adwaita-dark') or scheme_mgr.get_scheme('cobalt') or scheme_mgr.get_scheme('oblivion')
+        if scheme:
+            buffer.set_style_scheme(scheme)
+            
+        # 3. Chargement du code
+        buffer.set_text(self.block["code"])
+        textview.set_buffer(buffer)
+        # ------------------------------------------------------------------------
         
         scroll.set_child(textview)
         content.append(scroll)
@@ -2755,17 +2780,18 @@ class BlockCard(Gtk.Box):
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         btn_box.set_halign(Gtk.Align.END)
         
-        btn1 = Gtk.Button(label="📋 Copy")
-        btn1.connect("clicked", lambda *_: self._do_copy())
-        btn_box.append(btn1)
+        btn_copy = Gtk.Button(label="📋 Copier")
+        btn_copy.connect("clicked", lambda *_: self._do_copy())
+        btn_box.append(btn_copy)
         
-        # Le bouton Fermer agit maintenant comme "Sauvegarder et Fermer" pour simplifier l'interface
+        # Le bouton Fermer agit maintenant comme "Sauvegarder et Fermer"
         btn_close = Gtk.Button(label="✕ Fermer (Sauvegarder)", css_classes=["suggested-action"])
         btn_close.connect("clicked", lambda *_: self._save_from_popup(textview, dialog))
         btn_box.append(btn_close)
         
         content.append(btn_box)
         dialog.present()
+        
         
     def _save_from_popup(self, textview, dialog):
         self.block["code"] = textview.get_buffer().get_text(textview.get_buffer().get_start_iter(), textview.get_buffer().get_end_iter(), True)
@@ -7709,4 +7735,3 @@ class GykhamineStudioApp(Adw.Application):
 if __name__ == "__main__":
     app = GykhamineStudioApp()
     sys.exit(app.run(sys.argv))
-            
