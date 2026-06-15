@@ -333,7 +333,8 @@ def load_config() -> dict:
         for key, val in rows:
             try: cfg[key] = json.loads(val)
             except Exception: cfg[key] = val
-    except Exception: pass
+    except Exception:
+        global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
     return cfg
 
 def save_config(cfg: dict):
@@ -404,7 +405,8 @@ def get_cached_command(intent: str) -> dict:
         row = con.execute("SELECT command, is_process FROM ai_cmd_cache WHERE intent_hash = ?", (_get_intent_hash(intent),)).fetchone()
         con.close()
         if row: return {"command": row[0], "is_process": bool(row[1])}
-    except Exception: pass
+    except Exception:
+        global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
     return None
 
 def save_command_to_cache(intent: str, command: str, is_process: bool = False):
@@ -426,7 +428,8 @@ def get_cached_block(intent: str) -> dict:
         row = con.execute("SELECT content, block_type FROM ai_block_cache WHERE intent_hash = ?", (_get_intent_hash(intent),)).fetchone()
         con.close()
         if row: return {"content": row[0], "block_type": row[1]}
-    except Exception: pass
+    except Exception:
+        global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
     return None
 
 def save_block_to_cache(intent: str, content: str, block_type: str = 'code'):
@@ -448,7 +451,8 @@ def get_cached_process(intent: str) -> dict:
         row = con.execute("SELECT json_content, role_type FROM ai_process_cache WHERE intent_hash = ?", (_get_intent_hash(intent),)).fetchone()
         con.close()
         if row: return {"json_content": row[0], "role_type": row[1]}
-    except Exception: pass
+    except Exception:
+        global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
     return None
 
 def save_process_to_cache(intent: str, json_content: str, role_type: str = 'general'):
@@ -478,7 +482,8 @@ def kill_process_on_port(port: int) -> bool:
         if result.stdout.strip():
             for pid in result.stdout.strip().split('\n'): subprocess.run(f"kill -9 {pid}", shell=True)
             return True
-    except Exception: pass
+    except Exception:
+        global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
     return False
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1335,16 +1340,19 @@ class NativeTtyTerminal(Gtk.Window):
         cols = max(w // 9, 80)
         rows = max(h // 18, 24)
         try: fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-        except: pass
+        except:
+            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
 
     def _close_terminal(self, *args):
         self.is_running = False
         if self.pid:
             try: os.kill(self.pid, 9); os.waitpid(self.pid, 0)
-            except: pass
+            except:
+                global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
         if self.master_fd:
             try: os.close(self.master_fd)
-            except: pass
+            except:
+                global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
         self.destroy()
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1365,7 +1373,8 @@ class FileWatcher(threading.Thread):
             for p in self.root_path.rglob('*'):
                 if p.is_file():
                     try: self.snapshot[str(p)] = p.stat().st_mtime
-                    except: pass
+                    except:
+                        global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
 
     def run(self):
         while self.running:
@@ -1379,7 +1388,8 @@ class FileWatcher(threading.Thread):
                         mtime = p.stat().st_mtime
                         current_files[str(p)] = mtime
                         if str(p) not in self.snapshot or self.snapshot[str(p)] != mtime: changed = True
-                    except: pass
+                    except:
+                        global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
             if set(current_files.keys()) != set(self.snapshot.keys()): changed = True
             if changed:
                 self.snapshot = current_files
@@ -1790,7 +1800,8 @@ class LlamaSetupDialog(Gtk.Dialog):
         try:
             file = dialog.open_finish(result)
             if file: entry.set_text(file.get_path())
-        except: pass
+        except:
+            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
 
     def _on_start(self, *_):
         bin_path = self.entry_bin.get_text().strip()
@@ -2155,7 +2166,8 @@ class GitManagerDialog(Gtk.Dialog):
         try:
             folder = dialog.select_folder_finish(result)
             if folder: self.entry_path.set_text(folder.get_path())
-        except: pass
+        except:
+            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
 
     def _log(self, text):
         buf = self.txt_log.get_buffer()
@@ -4202,7 +4214,8 @@ class ControlPanel(Gtk.Box):
             res = cur.fetchone()
             con.close()
             if res: return bool(res[0])
-        except: pass
+        except:
+            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
         try:
             return subprocess.run(["systemctl", "is-enabled", service_name], capture_output=True).returncode == 0
         except: return False
@@ -4742,7 +4755,8 @@ chmod 700 /run/tor
                 self.lbl_tor_status.set_text("Status: 🟢 Actif"); self.lbl_tor_status.remove_css_class("dim-label")
             else:
                 self.lbl_tor_status.set_text("Status: 🔴 Inactif"); self.lbl_tor_status.add_css_class("dim-label")
-        except: pass
+        except:
+            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
         return False
 
     def _check_tor_ip(self):
@@ -5087,7 +5101,8 @@ chmod 700 /run/tor
         try:
             folder = dialog.select_folder_finish(result)
             if folder: entry.set_text(folder.get_path())
-        except: pass
+        except:
+            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
 
     # ═══════════════════════════════════════════════════════════════════════
     #  NOUVEAU : GÉNÉRATION SSL AUTOMATIQUE
@@ -5479,7 +5494,8 @@ chmod 700 /run/tor
                     lines = [l for l in lines if not l.strip().startswith("# --- Gykhamine NFS ---") and not l.strip().startswith(export_dir)]
                     content = "".join(lines)
                     subprocess.run(["sudo", "tee", exports_path], input=content, text=True, check=True)
-                except Exception: pass
+                except Exception:
+                    global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
                 subprocess.run(["sudo", "exportfs", "-ra"], check=True)
                 subprocess.run(["sudo", "systemctl", "stop", "nfs-server.service"], check=True)
                 GLib.idle_add(self._set_dot, "nfs_server", False)
@@ -6186,7 +6202,8 @@ print(json.dumps(result, default=str))
         try:
             folder = dialog.select_folder_finish(result)
             if folder: entry.set_text(str(Path(folder.get_path()) / f"{self.get_project_root().name}.zip"))
-        except Exception: pass
+        except Exception:
+            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
 
     def _decompress_archive(self, *_):
         Gtk.FileDialog(title="Select a .zip archive").open(self.get_root(), None, self._on_decompress_selected)
@@ -6657,7 +6674,8 @@ class DirectoryPickerRow(Adw.ActionRow):
         try:
             folder = dialog.select_folder_finish(result)
             if folder: self.entry.set_text(str(Path(folder.get_path()) / self.filename))
-        except Exception: pass
+        except Exception:
+            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
 
     def get_text(self): return self.entry.get_text()
 
@@ -6757,7 +6775,8 @@ class SettingsDialog(Adw.PreferencesDialog):
         try:
             self.config["default_port_range_start"] = int(self.config.get("default_port_range_start", 8000))
             self.config["default_port_range_end"] = int(self.config.get("default_port_range_end", 8010))
-        except: pass
+        except:
+            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
         self.on_save(self.config); self.close()
 
 
@@ -7679,7 +7698,8 @@ class GykhamineStudioApp(Adw.Application):
         try:
             folder = dialog.select_folder_finish(result)
             if folder: self._load_project(Path(folder.get_path()))
-        except: pass
+        except:
+            global_log(f"⚠️ Erreur silencieuse interceptée dans gy.py")
 
     # Dans la classe GykhamineStudioApp, méthode _load_project
     def _load_project(self, path: Path):
