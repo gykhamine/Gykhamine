@@ -3354,11 +3354,15 @@ class ControlPanel(Gtk.Box):
         
         lbl2 = Gtk.Label(label="🗄 Django Commands (manage.py)"); lbl2.add_css_class("control-section-title"); lbl2.set_xalign(0); self.append(lbl2)
         grid = Gtk.Grid(); grid.set_column_spacing(6); grid.set_row_spacing(6)
-        commands = [("📐 makemigrations", "makemigrations"), ("⬆ migrate", "migrate"), ("👤 superuser", "createsuperuser"), ("🐚 shell", "shell"), ("🗄 dbshell", "dbshell"), ("📦 collectstatic", "collectstatic"), ("✅ check", "check"), ("📜 showmigrations", "showmigrations"), ("🧹 flush", "flush")]
+        commands = [("📐 makemigrations", "makemigrations"), ("⬆ migrate", "migrate"), ("👤 superuser", "createsuperuser"), ("📱 New App", "startapp"), ("🐚 shell", "shell"), ("🗄 dbshell", "dbshell"), ("📦 collectstatic", "collectstatic"), ("✅ check", "check"), ("📜 showmigrations", "showmigrations"), ("🧹 flush", "flush")]
         for idx, (label, cmd) in enumerate(commands):
             btn = Gtk.Button(label=label); btn.add_css_class("ctrl-btn")
-            if cmd == "createsuperuser": btn.connect("clicked", lambda *_: self._show_createsuperuser_dialog())
-            else: btn.connect("clicked", lambda _, c=cmd: self._run_manage_command(c))
+            if cmd == "createsuperuser": 
+                btn.connect("clicked", lambda *_: self._show_createsuperuser_dialog())
+            elif cmd == "startapp": 
+                btn.connect("clicked", lambda *_: self._show_startapp_dialog())
+            else: 
+                btn.connect("clicked", lambda _, c=cmd: self._run_manage_command(c))
             grid.attach(btn, idx % 3, idx // 3, 1, 1)
         self.append(grid)
         
@@ -3649,6 +3653,75 @@ class ControlPanel(Gtk.Box):
             self._run_cmd([sys.executable, str(mp), "createsuperuser", "--noinput"], cwd=str(mp.parent), extra_env=extra_env)
             dialog.destroy()
         btn_create.connect("clicked", on_create); btn_cancel.connect("clicked", lambda *_: dialog.destroy()); dialog.present()
+
+    def _show_startapp_dialog(self, *_):
+        """Ouvre un dialogue pour créer une nouvelle app Django"""
+        dialog = Gtk.Dialog(title="Créer une nouvelle App Django", transient_for=self.get_root())
+        dialog.add_css_class("rounded-dialog")
+        dialog.set_default_size(400, 200)
+        
+        content = dialog.get_content_area()
+        content.set_spacing(12)
+        set_margins(content, 16)
+        
+        # Information
+        info_lbl = Gtk.Label(label="Entrez le nom de l'application (ex: blog, accounts)", xalign=0, margin_bottom=8)
+        info_lbl.add_css_class("dim-label")
+        content.append(info_lbl)
+        
+        # Champ de saisie
+        entry_name = Gtk.Entry()
+        entry_name.set_placeholder_text("nom_de_l_app")
+        entry_name.set_activates_default(True)
+        content.append(entry_name)
+        
+        # Boutons
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, halign=Gtk.Align.END, margin_top=12)
+        btn_cancel = Gtk.Button(label="Annuler")
+        btn_create = Gtk.Button(label="✅ Créer", css_classes=["suggested-action"])
+        btn_box.append(btn_cancel)
+        btn_box.append(btn_create)
+        content.append(btn_box)
+        
+        def on_create(*_):
+            app_name = entry_name.get_text().strip()
+            if not app_name:
+                self.show_toast("❌ Le nom de l'app est requis")
+                return
+            
+            # Vérification basique du format
+            if not re.match(r'^[a-zA-Z_]\w*$', app_name):
+                self.show_toast("❌ Nom invalide (lettres, chiffres, underscores uniquement)")
+                return
+                
+            self._run_startapp(app_name)
+            dialog.destroy()
+            
+        btn_create.connect("clicked", on_create)
+        btn_cancel.connect("clicked", lambda *_: dialog.destroy())
+        entry_name.connect("activate", on_create)
+        
+        dialog.present()
+
+    def _run_startapp(self, app_name):
+        """Exécute la commande startapp"""
+        mp = self._manage_path()
+        if not mp:
+            self.show_toast("❌ Projet Django non détecté (manage.py introuvable)")
+            return
+            
+        self.terminal._log(f"▶ Création de l'app : {app_name}")
+        # Exécution de la commande
+        self._run_cmd([sys.executable, str(mp), "startapp", app_name], cwd=str(mp.parent))
+        
+        # Rafraîchissement de l'explorateur de fichiers après un court délai
+        def refresh_explorer():
+            if self.get_project_root():
+                self.file_panel.load_project(self.get_project_root(), self.get_config())
+                self.show_toast(f"✅ App '{app_name}' créée")
+        
+        GLib.timeout_add_seconds(2, refresh_explorer)
+
 
     def _get_free_port(self, preferred_port=None):
         cfg = self.get_config()
