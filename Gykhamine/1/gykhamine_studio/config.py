@@ -163,7 +163,7 @@ if not auto_mount_gy():
     print("⚠️ Le montage automatique a échoué. L'application va continuer mais certains chemins GY peuvent être inaccessibles.")
     
 # 2. Définition des valeurs par défaut uniquement (Lecture dynamique depuis .env)
-BASE_PATH = os.getenv("/run/media/gykhamine/GY/GS-CODE"))
+BASE_PATH ="/run/media/gykhamine/GY/GS-CODE"
 
 DEFAULT_CONFIG = {
     # LLaMA Server
