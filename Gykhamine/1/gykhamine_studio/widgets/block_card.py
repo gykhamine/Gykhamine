@@ -1,0 +1,672 @@
+"""Module généré automatiquement - Classe BlockCard"""
+import gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+gi.require_version("GtkSource", "5")
+from gi.repository import Gtk, Adw, GLib, Gio, Gdk, Pango, GtkSource
+from pathlib import Path
+
+# Imports relatifs vers les modules racines
+from ..config import global_log, set_margins, enable_window_controls
+from ..ai_engine import AIModificationDialog
+from ..parser import get_gtksource_lang_id
+
+# Constantes locales nécessaires à l'affichage des icônes
+TYPE_ICONS = {
+    "import": "📦", "class": "🏛", "function": "⚡", "separator": "─",
+    "comment": "💬", "other": "▪", "template": "🌐", "template_part": "🌐",
+    "django_block": "🧩", "style": "🎨", "style_rule": "🎨",
+    "script": "⚙️", "script_block": "⚡", "c_block": "⚙️",
+    "logic_block": "🔁", "css_file": "🎨", "html_file": "🌐",
+    "css_selector": "🎨", "css_at_media": "🎨", "css_at_keyframes": "🎨",
+    "css_variable": "🎨", "css_property": "🎨",
+}
+
+class BlockCard(Gtk.Box):
+    def __init__(self, block: dict, on_save_cb, on_delete_cb, on_copy_cb, file_ext, ai_engine=None, parent_window=None, on_compile_cb=None):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.block = block
+        self.on_save_cb = on_save_cb
+        self.on_delete_cb = on_delete_cb
+        self.on_copy_cb = on_copy_cb
+        self.file_ext = file_ext
+        self.ai_engine = ai_engine
+        self.parent_window = parent_window
+        self.on_compile_cb = on_compile_cb
+        self.expanded = False
+        
+        self.add_css_class("block-card")
+        
+        # Determine language for syntax highlighting
+        self.lang = self._detect_lang()
+        
+        self._build_header()
+        self._build_editor()
+
+    def _detect_lang(self) -> str:
+        """
+        Détecte le langage à utiliser pour la coloration syntaxique.
+        Priorité : type de bloc (style/script/template) → extension de fichier.
+        Retourne l'extension courte (ex: 'js', 'py', 'ts') qui sera traduite
+        par get_gtksource_lang_id() en ID de langage GtkSource.
+        """
+        btype = self.block.get("type", "")
+        # 1) CSS (bloc <style> ou blocs CSS_)
+        if btype == "style" or btype.startswith("css_"):
+            return "css"
+        # 2) JavaScript (bloc <script> inline HTML)
+        elif btype in ("script", "script_block"):
+            return "js"
+        # 3) HTML / templates Django-Jinja
+        elif btype in ("django_block", "template_part", "html_file", "template"):
+            return "html"
+        # 4) Python détecté via extension (incluant pygments)
+        elif btype in ("function", "class", "import", "logic_block", "comment"):
+            return self.file_ext or "py"
+        # 5) Par défaut, l'extension du fichier
+        return self.file_ext or "text"
+
+    def _get_lang_id(self) -> str:
+        """Retourne l'ID GtkSource pour la coloration syntaxique."""
+        return get_gtksource_lang_id(self.lang)
+
+    def _build_header(self):
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        set_margins(header, 8); header.set_margin_start(12)
+        
+        # Icône
+        icon = TYPE_ICONS.get(self.block["type"], "▪")
+        header.append(Gtk.Label(label=icon, css_classes=["block-icon"]))
+        
+        # Badge Type
+        badge = Gtk.Label(label=self.block["type"].upper())
+        badge.add_css_class("block-badge")
+        badge.add_css_class(f"badge-{self.block['type']}")
+        header.append(badge)
+        
+        # Nom du bloc
+        name_text = self.block.get("hierarchical_id", "")
+        block_name = self.block.get("name", "")
+        if block_name and block_name != name_text:
+            display = f"{name_text}  {block_name}" if name_text else block_name
+        else:
+            display = name_text or block_name or "Bloc"
+        
+        lbl_name = Gtk.Label(label=display)
+        lbl_name.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        lbl_name.set_hexpand(True)
+        lbl_name.set_xalign(0)
+        lbl_name.add_css_class("block-name")
+        lbl_name.set_tooltip_text(block_name)
+        header.append(lbl_name)
+        self.lbl_name = lbl_name
+        self._name_display_text = display
+        
+        # Bouton IA
+        if self.ai_engine:
+            btn_ai = Gtk.Button(label="🤖")
+            btn_ai.set_tooltip_text("Modifier avec l'IA")
+            btn_ai.add_css_class("block-action-btn")
+            btn_ai.add_css_class("btn-ai")
+            btn_ai.connect("clicked", self._open_ai_dialog)
+            header.append(btn_ai)
+
+        # Bouton Compiler (uniquement sur les blocs C/C++, directement dans l'éditeur —
+        # plus besoin de copier-coller le code dans un dialogue séparé)
+        if self.block.get("type") == "c_block" and self.on_compile_cb:
+            btn_compile = Gtk.Button(label="🛠️")
+            btn_compile.set_tooltip_text("Compiler ce bloc (C/C++)")
+            btn_compile.add_css_class("block-action-btn")
+            btn_compile.connect("clicked", lambda *_: self.on_compile_cb(self.block))
+            header.append(btn_compile)
+            
+        # Boutons Déplacement
+        btn_up = Gtk.Button(label="⬆")
+        btn_up.set_tooltip_text("Monter")
+        btn_up.add_css_class("block-action-btn")
+        btn_up.connect("clicked", lambda *_: self._move_block(-1))
+        
+        btn_down = Gtk.Button(label="⬇")
+        btn_down.set_tooltip_text("Descendre")
+        btn_down.add_css_class("block-action-btn")
+        btn_down.connect("clicked", lambda *_: self._move_block(1))
+        
+        header.append(btn_up)
+        header.append(btn_down)
+
+        # Boutons Actions
+        for label, tooltip, cb, css in [
+            ("👁", "Voir / Éditer", self._view_code, "btn-view"),
+            ("✏", "Édition inline", self._toggle_edit, "btn-edit"),
+            ("⧉", "Copier", self._do_copy, "btn-copy"),
+            ("✕", "Supprimer", self._do_delete, "btn-delete")
+        ]:
+            btn = Gtk.Button(label=label)
+            btn.set_tooltip_text(tooltip)
+            btn.add_css_class("block-action-btn")
+            btn.add_css_class(css)
+            btn.connect("clicked", cb)
+            header.append(btn)
+            
+        self.append(header)
+        
+        # Barre accentuée
+        bar = Gtk.Box()
+        bar.set_size_request(-1, 2)
+        bar.add_css_class("block-accent-bar")
+        bar.add_css_class(f"accent-{self.block['type']}")
+        self.append(bar)
+
+    def _setup_source_buffer(self, buffer: GtkSource.Buffer, text: str):
+        """
+        Configure un GtkSource.Buffer avec le bon langage et thème.
+        Robuste : essaie plusieurs variantes de nom de langage (lang-js,
+        javascript, JavaScript, js) + alias par extension, et plusieurs
+        thèmes sombres en fallback pour garantir la coloration.
+        """
+        # ── LANGAGE ─────────────────────────────────────────────
+        lang_mgr = GtkSource.LanguageManager.get_default()
+        lang_id = self._get_lang_id()
+
+        # Liste d'alias à essayer si le premier ID ne donne rien
+        aliases = self._lang_aliases(lang_id)
+        language = None
+        for candidate in aliases:
+            language = lang_mgr.get_language(candidate)
+            if language is not None:
+                break
+
+        # Tentative ultime : recherche par pattern (par exemple 'js' → 'javascript')
+        if language is None and lang_id:
+            # Certains managers exposent get_language() insensible à la casse
+            for name in ("javascript", "jscript", "java", "typescript", "python3", "python"):
+                language = lang_mgr.get_language(name)
+                if language is not None:
+                    break
+
+        if language is not None:
+            buffer.set_language(language)
+        # Sinon : pas de coloration spécifique, mais le buffer reste fonctionnel
+
+        # ── THÈME / SCHÉMA DE COULEURS ──────────────────────────
+        scheme_mgr = GtkSource.StyleSchemeManager.get_default()
+        scheme = (
+            scheme_mgr.get_scheme('Adwaita-dark')
+            or scheme_mgr.get_scheme('classic-dark')
+            or scheme_mgr.get_scheme('cobalt')
+            or scheme_mgr.get_scheme('oblivion')
+            or scheme_mgr.get_scheme('kate')
+            or scheme_mgr.get_scheme('solarized-dark')
+            or scheme_mgr.get_scheme('tango')
+        )
+        if scheme is not None:
+            buffer.set_style_scheme(scheme)
+
+        buffer.set_text(text)
+
+    @staticmethod
+    def _lang_aliases(lang_id: str) -> list[str]:
+        """
+        Retourne une liste d'alias à essayer pour récupérer un langage GtkSource.
+        Garantit que JS, TS, HTML, CSS, Python, etc. sont correctement résolus
+        même sur des installations minimales.
+        """
+        aliases_map = {
+            # JS & dérivés
+            "javascript": ["javascript", "js", "JavaScript", "jscript"],
+            "js":         ["javascript", "js", "JavaScript", "jscript"],
+            "jsx":        ["jsx", "javascript", "js", "JavaScript"],
+            "typescript": ["typescript", "ts", "TypeScript", "javascript", "js"],
+            "ts":         ["typescript", "ts", "TypeScript", "javascript", "js"],
+            "tsx":        ["tsx", "typescript", "javascript", "js"],
+            # Web
+            "html":       ["html", "HTML", "html5"],
+            "css":        ["css", "CSS"],
+            "scss":       ["scss", "SCSS", "css"],
+            "sass":       ["sass", "SASS"],
+            "less":       ["less", "LESS", "css"],
+            # Scripts
+            "python":     ["python3", "python", "Python", "py"],
+            "py":         ["python3", "python", "Python", "py"],
+            "ruby":       ["ruby", "Ruby", "rb"],
+            "rb":         ["ruby", "Ruby"],
+            "php":        ["php", "PHP"],
+            "perl":       ["perl", "Perl", "pl"],
+            "lua":        ["lua", "Lua"],
+            "sh":         ["sh", "bash", "shell", "Bash", "Shell-script"],
+            "bash":       ["sh", "bash", "shell", "Bash", "Shell-script"],
+            "fish":       ["fish", "Fish"],
+            # C-family
+            "c":          ["c", "C"],
+            "cpp":        ["cpp", "C++", "c++", "c"],
+            "objc":       ["objc", "objective-c", "objective_c"],
+            "cs":         ["cs", "c-sharp", "C#"],
+            # JVM
+            "java":       ["java", "Java"],
+            "kotlin":     ["kotlin", "Kotlin"],
+            "scala":      ["scala", "Scala"],
+            "groovy":     ["groovy", "Groovy"],
+            # Systèmes
+            "go":         ["go", "Go"],
+            "rust":       ["rust", "Rust"],
+            "swift":      ["swift", "Swift"],
+            # Données
+            "sql":        ["sql", "SQL"],
+            "json":       ["json", "JSON"],
+            "xml":        ["xml", "XML"],
+            "yaml":       ["yaml", "YAML", "yml"],
+            "toml":       ["toml", "TOML"],
+            # Divers
+            "markdown":   ["markdown", "Markdown", "md"],
+            "ini":        ["ini", "INI"],
+            "dockerfile": ["dockerfile", "Dockerfile"],
+            "rst":        ["rst", "RST", "rest"],
+            "diff":       ["diff", "Diff"],
+            "makefile":   ["makefile", "Makefile", "make"],
+        }
+        return aliases_map.get(lang_id, [lang_id, lang_id.capitalize(), lang_id.upper()])
+
+    def _build_editor(self):
+        self.editor_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        set_margins(self.editor_box, 0)
+        self.editor_box.set_margin_start(12)
+        self.editor_box.set_margin_end(12)
+        self.editor_box.set_margin_bottom(8)
+        self.editor_box.set_visible(False)
+        
+        # Vue Source avec coloration syntaxique par langage
+        self.textview = GtkSource.View()
+        self.textview.set_monospace(True)
+        self.textview.set_wrap_mode(Gtk.WrapMode.NONE)
+        self.textview.set_show_line_numbers(True)
+        self.textview.set_highlight_current_line(True)
+        self.textview.set_auto_indent(True)
+        self.textview.set_insert_spaces_instead_of_tabs(True)
+        self.textview.set_tab_width(4)
+        self.textview.set_indent_width(4)
+        self.textview.set_smart_home_end(True)
+        self.textview.add_css_class("code-editor")
+        
+        buffer = GtkSource.Buffer()
+        self._setup_source_buffer(buffer, self.block["code"])
+        self.textview.set_buffer(buffer)
+        
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_size_request(-1, 200)
+        scroll.set_child(self.textview)
+        
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_cancel = Gtk.Button(label="✕ Fermer")
+        btn_cancel.add_css_class("cancel-btn")
+        btn_cancel.connect("clicked", self._toggle_edit)
+        bar.append(btn_cancel)
+        
+        self.editor_box.append(scroll)
+        self.editor_box.append(bar)
+        self.append(self.editor_box)
+        self._search_settings = None
+        self._search_context = None
+
+    def highlight_search(self, query: str):
+        """Surligne toutes les occurrences de `query` et scrolle jusqu'à la
+        première. Utilise le signal notify::occurrences-count pour attendre
+        que GtkSource ait fini de scanner le buffer (fonctionne sur n'importe
+        quelle taille). Token de génération pour annuler les callbacks périmés.
+        """
+        if not query:
+            return self.clear_search_highlight()
+
+        buf = self.textview.get_buffer()
+        if buf.get_char_count() == 0 and self.block.get("code", ""):
+            buf.set_text(self.block["code"])
+
+        if not hasattr(self, "_search_gen"):
+            self._search_gen = 0
+        self._search_gen += 1
+        gen = self._search_gen
+
+        def _setup_context():
+            if self._search_context is None:
+                self._search_settings = GtkSource.SearchSettings()
+                self._search_settings.set_case_sensitive(False)
+                self._search_settings.set_at_word_boundaries(False)
+                self._search_settings.set_regex_enabled(False)
+                self._search_settings.set_wrap_around(True)
+                self._search_context = GtkSource.SearchContext.new(buf, self._search_settings)
+                self._search_context.set_highlight(True)
+            self._search_settings.set_search_text(query)
+
+        def _scroll_to_first():
+            """Scroll vers la 1ère occurrence — appelé seulement quand le scan est fini."""
+            if self._search_gen != gen:
+                return
+            found, match_start, match_end, _ = self._search_context.forward(buf.get_start_iter())
+            if found:
+                buf.place_cursor(match_start)
+                self.textview.scroll_to_iter(match_start, 0.1, True, 0.0, 0.3)
+
+        def _wait_for_scan_then_scroll():
+            """Attend que occurrences-count soit >= 0 (scan terminé) puis scrolle."""
+            if self._search_gen != gen:
+                return
+            handler_id = [None]
+            def _on_occurrences_changed(ctx, _param):
+                if self._search_gen != gen:
+                    if handler_id[0] is not None:
+                        ctx.disconnect(handler_id[0])
+                        handler_id[0] = None
+                    return
+                count = ctx.get_occurrences_count()
+                if count < 0:
+                    return  # encore en cours de scan, on attend
+                # Scan terminé
+                if handler_id[0] is not None:
+                    ctx.disconnect(handler_id[0])
+                    handler_id[0] = None
+                GLib.idle_add(_scroll_to_first)
+            handler_id[0] = self._search_context.connect(
+                "notify::occurrences-count", _on_occurrences_changed
+            )
+            # Cas où le scan est déjà terminé avant qu'on connecte le signal
+            if self._search_context.get_occurrences_count() >= 0:
+                self._search_context.disconnect(handler_id[0])
+                handler_id[0] = None
+                GLib.idle_add(_scroll_to_first)
+
+        def _apply():
+            if self._search_gen != gen:
+                return False
+            _setup_context()
+            _wait_for_scan_then_scroll()
+            return False
+
+        if self.textview.get_mapped():
+            GLib.idle_add(_apply)
+        else:
+            handler_id = [None]
+            def _on_map(*_):
+                if handler_id[0] is not None:
+                    self.textview.disconnect(handler_id[0])
+                    handler_id[0] = None
+                GLib.idle_add(_apply)
+            handler_id[0] = self.textview.connect("map", _on_map)
+
+    def clear_search_highlight(self):
+        if not hasattr(self, "_search_gen"):
+            self._search_gen = 0
+        self._search_gen += 1  # annule tout callback highlight en vol
+        if self._search_settings is not None:
+            self._search_settings.set_search_text(None)
+
+    def highlight_name_match(self, query: str):
+        """Surligne en couleur, directement dans le titre de la carte (sans avoir
+        besoin de l'ouvrir), la portion du nom qui correspond à `query` — comme
+        highlight_search() le fait déjà pour le code."""
+        text = self._name_display_text
+        if not query:
+            self.lbl_name.set_text(text)
+            return
+        lower_text = text.lower()
+        lower_query = query.lower()
+        idx = lower_text.find(lower_query)
+        if idx == -1:
+            self.lbl_name.set_text(text)
+            return
+        before = GLib.markup_escape_text(text[:idx])
+        match = GLib.markup_escape_text(text[idx: idx + len(query)])
+        after = GLib.markup_escape_text(text[idx + len(query):])
+        self.lbl_name.set_markup(
+            f'{before}<span background="#4aa3df" foreground="#0b1b26">{match}</span>{after}'
+        )
+        
+    def _toggle_edit(self, *_):
+        if self.expanded:
+            self.block["code"] = self.textview.get_buffer().get_text(
+                self.textview.get_buffer().get_start_iter(), 
+                self.textview.get_buffer().get_end_iter(), 
+                True
+            )
+            self.on_save_cb(self.block, self.block["code"])
+            
+        self.expanded = not self.expanded
+        self.editor_box.set_visible(self.expanded)
+
+    def _view_code(self, *_):
+        dialog = Gtk.Dialog(title=f"Édition : {self.block['name']}", transient_for=self.get_root())
+        dialog.add_css_class("rounded-dialog")
+        dialog.set_default_size(800, 500)
+        enable_window_controls(dialog, f"Édition : {self.block['name']}")
+
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        set_margins(content, 12)
+        dialog.set_child(content)
+
+        # ── BARRE DE RECHERCHE ────────────────────────────────────────
+        search_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        search_entry = Gtk.SearchEntry()
+        search_entry.set_placeholder_text("🔍 Rechercher dans le bloc…")
+        search_entry.set_hexpand(True)
+        search_bar.append(search_entry)
+        btn_prev = Gtk.Button(label="▲")
+        btn_prev.set_tooltip_text("Occurrence précédente")
+        btn_prev.add_css_class("flat")
+        search_bar.append(btn_prev)
+        btn_next = Gtk.Button(label="▼")
+        btn_next.set_tooltip_text("Occurrence suivante")
+        btn_next.add_css_class("flat")
+        search_bar.append(btn_next)
+        match_label = Gtk.Label(label="")
+        match_label.add_css_class("dim-label")
+        search_bar.append(match_label)
+        content.append(search_bar)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_hexpand(True)
+
+        textview = GtkSource.View()
+        textview.set_monospace(True)
+        textview.set_editable(True)
+        textview.set_wrap_mode(Gtk.WrapMode.WORD)
+        textview.set_show_line_numbers(True)
+        textview.set_highlight_current_line(True)
+        textview.set_auto_indent(True)
+        textview.set_insert_spaces_instead_of_tabs(True)
+        textview.set_smart_home_end(True)
+        textview.add_css_class("code-editor")
+
+        buffer = GtkSource.Buffer()
+        self._setup_source_buffer(buffer, self.block["code"])
+        textview.set_buffer(buffer)
+
+        scroll.set_child(textview)
+        content.append(scroll)
+
+        # ── LOGIQUE DE RECHERCHE ──────────────────────────────────────
+        popup_search_settings = GtkSource.SearchSettings()
+        popup_search_settings.set_case_sensitive(False)
+        popup_search_settings.set_at_word_boundaries(False)
+        popup_search_settings.set_regex_enabled(False)
+        popup_search_settings.set_wrap_around(True)
+        popup_search_ctx = GtkSource.SearchContext.new(buffer, popup_search_settings)
+        popup_search_ctx.set_highlight(True)
+        popup_search_gen = [0]  # token d'annulation pour les callbacks en vol
+
+        def _update_match_label(*_):
+            n = popup_search_ctx.get_occurrences_count()
+            if n < 0:
+                match_label.set_text("⏳ Scan…")
+            elif n == 0:
+                match_label.set_text("Aucun résultat")
+            else:
+                match_label.set_text(f"{n} résultat(s)")
+
+        # Connecter le signal une fois pour toujours pour mettre à jour le label
+        popup_search_ctx.connect("notify::occurrences-count", _update_match_label)
+
+        def _navigate(forward: bool):
+            """Navigue seulement quand le scan est terminé (occurrences-count >= 0)."""
+            def _do_nav():
+                insert = buffer.get_iter_at_mark(buffer.get_insert())
+                if forward:
+                    found, start, end, _ = popup_search_ctx.forward(insert)
+                else:
+                    found, start, end, _ = popup_search_ctx.backward(insert)
+                if found:
+                    buffer.select_range(start, end)
+                    textview.scroll_to_mark(buffer.get_insert(), 0.1, True, 0.5, 0.5)
+
+            if popup_search_ctx.get_occurrences_count() >= 0:
+                _do_nav()
+            else:
+                # Scan encore en cours : attendre la fin
+                handler_id = [None]
+                def _on_ready(ctx, _param):
+                    if ctx.get_occurrences_count() < 0:
+                        return
+                    if handler_id[0] is not None:
+                        ctx.disconnect(handler_id[0])
+                        handler_id[0] = None
+                    GLib.idle_add(_do_nav)
+                handler_id[0] = popup_search_ctx.connect("notify::occurrences-count", _on_ready)
+
+        def _on_search_changed(entry):
+            popup_search_gen[0] += 1
+            gen = popup_search_gen[0]
+            q = entry.get_text()
+            popup_search_settings.set_search_text(q if q else None)
+            if not q:
+                match_label.set_text("")
+                return
+            # Attendre fin du scan puis scroller vers la 1ère occurrence
+            def _auto_scroll():
+                if popup_search_gen[0] != gen:
+                    return
+                if popup_search_ctx.get_occurrences_count() < 0:
+                    return  # pas encore fini, le signal notify s'en chargera
+                found, start, end, _ = popup_search_ctx.forward(buffer.get_start_iter())
+                if found:
+                    buffer.select_range(start, end)
+                    textview.scroll_to_mark(buffer.get_insert(), 0.1, True, 0.5, 0.5)
+
+            handler_id = [None]
+            def _on_scan_done(ctx, _param):
+                if popup_search_gen[0] != gen:
+                    if handler_id[0] is not None:
+                        ctx.disconnect(handler_id[0])
+                        handler_id[0] = None
+                    return
+                if ctx.get_occurrences_count() < 0:
+                    return
+                if handler_id[0] is not None:
+                    ctx.disconnect(handler_id[0])
+                    handler_id[0] = None
+                GLib.idle_add(_auto_scroll)
+            handler_id[0] = popup_search_ctx.connect("notify::occurrences-count", _on_scan_done)
+            # Cas où déjà terminé
+            if popup_search_ctx.get_occurrences_count() >= 0:
+                if handler_id[0] is not None:
+                    popup_search_ctx.disconnect(handler_id[0])
+                    handler_id[0] = None
+                GLib.idle_add(_auto_scroll)
+
+        def _go_next(*_): _navigate(True)
+        def _go_prev(*_): _navigate(False)
+
+        search_entry.connect("search-changed", _on_search_changed)
+        btn_next.connect("clicked", _go_next)
+        btn_prev.connect("clicked", _go_prev)
+        search_entry.connect("activate", _go_next)
+        search_entry.connect("next-match", _go_next)
+        search_entry.connect("previous-match", _go_prev)
+
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_box.set_halign(Gtk.Align.END)
+
+        btn_copy = Gtk.Button(label="📋 Copier")
+        btn_copy.connect("clicked", lambda *_: self._do_copy())
+        btn_box.append(btn_copy)
+
+        content.append(btn_box)
+
+        def _on_close_request(_dialog):
+            self._save_from_popup(textview, dialog)
+            return True
+        dialog.connect("close-request", _on_close_request)
+
+        dialog.present()
+        
+    def _save_from_popup(self, textview, dialog):
+        self.block["code"] = textview.get_buffer().get_text(
+            textview.get_buffer().get_start_iter(), 
+            textview.get_buffer().get_end_iter(), 
+            True
+        )
+        self.on_save_cb(self.block, self.block["code"])
+        self.textview.get_buffer().set_text(self.block["code"])
+        dialog.destroy()
+
+    def _do_save(self, *_):
+        self.block["code"] = self.textview.get_buffer().get_text(
+            self.textview.get_buffer().get_start_iter(), 
+            self.textview.get_buffer().get_end_iter(), 
+            True
+        )
+        self.on_save_cb(self.block, self.block["code"])
+        self._toggle_edit()
+
+    def _do_copy(self, *_): 
+        Gdk.Display.get_default().get_clipboard().set(self.block["code"])
+        
+    def _do_delete(self, *_): 
+        self.on_delete_cb(self.block)
+
+    def _open_ai_dialog(self, *_):
+        if not self.ai_engine or not self.parent_window: return
+        
+        root = self.get_root()
+        if not root: return
+
+        project_root = None
+        if hasattr(root, 'project_root'):
+            project_root = root.project_root
+            
+        def on_confirm(block, new_code):
+            self.block["code"] = new_code
+            self.on_save_cb(self.block, new_code)
+            self.textview.get_buffer().set_text(new_code)
+            if hasattr(root, '_show_toast'):
+                root._show_toast("✅ Bloc modifié par IA")
+
+        dialog = AIModificationDialog(root, self.block, self.ai_engine, on_confirm, project_root=project_root)
+        dialog.present()
+        
+    def _move_block(self, direction):
+        """Déplace le bloc et sauvegarde."""
+        def find_and_swap(blocks_list, target_block, dir):
+            for i, b in enumerate(blocks_list):
+                if b is target_block:
+                    if dir == -1 and i > 0:
+                        blocks_list[i], blocks_list[i-1] = blocks_list[i-1], blocks_list[i]
+                        return True
+                    elif dir == 1 and i < len(blocks_list) - 1:
+                        blocks_list[i], blocks_list[i+1] = blocks_list[i+1], blocks_list[i]
+                        return True
+                if "children" in b and b["children"]:
+                    if find_and_swap(b["children"], target_block, dir):
+                        return True
+            return False
+
+        editor_view = self.parent_window
+        
+        if hasattr(editor_view, 'blocks') and find_and_swap(editor_view.blocks, self.block, direction):
+            editor_view._push_state()
+            editor_view._render_blocks()
+            editor_view._save_file()
+            
+            if hasattr(editor_view, 'toast_cb'):
+                editor_view.toast_cb("✅ Bloc déplacé")
+        else:
+            if hasattr(editor_view, 'toast_cb'):
+                editor_view.toast_cb("⚠️ Limite atteinte")
